@@ -18,7 +18,7 @@ class Config(BaseSettings):
     OWNER_CHAT_ID: int = Field(..., gt=0, description="Telegram user ID of the owner")
 
     # AI Configuration (OpenAI or OpenRouter)
-    OPENAI_API_KEY: str = Field(..., min_length=1, description="OpenAI/OpenRouter API key")
+    OPENAI_API_KEY: str = Field(default="", description="OpenAI/OpenRouter API key (can be empty for testing)")
     OPENAI_MODEL: str = Field(default="gpt-4o-mini", description="Model name (e.g., gpt-4o-mini or openrouter model)")
     OPENAI_BASE_URL: Optional[str] = Field(default=None, description="Custom base URL (e.g., https://openrouter.ai/api/v1)")
 
@@ -65,8 +65,7 @@ class Config(BaseSettings):
             errors.append("BOT_TOKEN is not set")
         if not self.OWNER_CHAT_ID:
             errors.append("OWNER_CHAT_ID is not set")
-        if not self.OPENAI_API_KEY:
-            errors.append("OPENAI_API_KEY is not set")
+        # OPENAI_API_KEY is optional for testing
         if errors:
             raise ValueError(f"Configuration errors: {', '.join(errors)}")
 

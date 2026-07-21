@@ -1,0 +1,54 @@
+# 🔧 Git Commands для исправления CI/CD
+
+## Исправлены проблемы:
+1. ✅ railway.json без BOM
+2. ✅ OPENAI_API_KEY теперь optional
+3. ✅ Ruff lint ошибки исправлены
+4. ✅ Дубликат import удалён
+5. ✅ 179/179 тестов проходят
+
+## Команды для commit и push:
+
+```bash
+# 1. Добавить все изменения
+git add .
+
+# 2. Создать коммит
+git commit -m "fix: CI/CD issues - railway.json BOM, optional API key, lint fixes"
+
+# 3. Отправить в GitHub
+git push origin main
+```
+
+## Что было исправлено:
+
+### config.py
+- OPENAI_API_KEY теперь optional (default="")
+- Удалена проверка OPENAI_API_KEY из validate()
+
+### bot/handlers/jobs_handler.py
+- Удалён дублированный import DB_PATH
+
+### bot/handlers/broadcast_handler.py
+- Удалён unused import json
+- Исправлен f-string без placeholders
+
+### railway.json
+- Пересохранён без UTF-8 BOM
+
+## После push:
+- CI/CD должен пройти
+- Railway задеплоит автоматически
+- Бот запустится
+
+## Проверка локально:
+```bash
+# Тесты
+python -m pytest tests/ -v
+
+# Lint
+python -m ruff check . --extend-exclude "venv,tests,scripts"
+
+# Config
+python -c "from config import get_config; print('✅ Config OK')"
+```

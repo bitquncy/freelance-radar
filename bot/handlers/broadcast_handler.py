@@ -1,6 +1,5 @@
 """Broadcast handler for sending messages to chat groups."""
 import aiosqlite
-import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler,
@@ -452,7 +451,7 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 status="completed"
             )
 
-        result_text = f"✅ **Рассылка завершена!**\n\n"
+        result_text = "✅ **Рассылка завершена!**\n\n"
         result_text += f"📊 Отправлено: {sent_count}\n"
         result_text += f"❌ Ошибок: {failed_count}\n"
         result_text += f"👥 Всего чатов: {len(members)}\n"

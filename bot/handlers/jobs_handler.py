@@ -159,7 +159,6 @@ async def vacancy_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if vacancy:
         from services.blacklist import BlacklistService
-        from config import DB_PATH
         bs = BlacklistService(DB_PATH)
         # Blacklist the vacancy
         await bs.add_to_blacklist("vacancy", kwork_id, OWNER_CHAT_ID, reason="user_decision")

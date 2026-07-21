@@ -15,13 +15,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 sys.path.insert(0, str(Path(__file__).parent))
 
 from services.logger_config import configure_logging, get_logger
-from services.dependencies import setup_services, get_registry
+from services.dependencies import setup_services
 from services.event_bus import get_event_bus, Events
 from bot.auth import owner_only
 from config import BOT_TOKEN, MONITOR_INTERVAL_MINUTES, validate_config
 from bot.keyboards import (
-    main_menu_keyboard, settings_keyboard,
-    filters_settings_keyboard, auto_mode_keyboard,
+    settings_keyboard,
 )
 from bot.commands import (
     start, help_command, check_sources_command,

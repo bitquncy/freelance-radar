@@ -1,7 +1,6 @@
 """Debug script to capture real Kwork HTML structure."""
 import asyncio
 import json
-from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -46,7 +45,7 @@ async def analyze_kwork():
         project_links = [l for l in links if "/projects/" in l["href"] and "/view" in l["href"]]
         print(f"Total links: {len(links)}")
         print(f"Project links: {len(project_links)}")
-        print(f"\nFirst 5 project links:")
+        print("\nFirst 5 project links:")
         for l in project_links[:5]:
             print(f"  URL: {l['href']}")
             print(f"  Text: {l['text'][:80]}")
@@ -66,7 +65,7 @@ async def analyze_kwork():
                 textPreview: e.innerText.trim().slice(0, 150)
             })).slice(0, 20)
         """)
-        print(f"\nPotential card containers (first 20):")
+        print("\nPotential card containers (first 20):")
         for i, c in enumerate(cards[:10]):
             print(f"  {i+1}. <{c['tag']}> class='{c['class'][:80]}' children={c['childCount']}")
             print(f"     Text: {c['textPreview'][:100]}")
@@ -82,7 +81,7 @@ async def analyze_kwork():
                 text: e.innerText.trim().slice(0, 100)
             })).slice(0, 15)
         """)
-        print(f"\nElements with currency (first 15):")
+        print("\nElements with currency (first 15):")
         for i, p in enumerate(price_elems[:10]):
             print(f"  {i+1}. <{p['tag']}> class='{p['class'][:60]}' → {p['text']}")
 
@@ -114,7 +113,7 @@ async def analyze_kwork():
         # Now try to open first project page
         if project_links:
             first_url = project_links[0]["href"]
-            print(f"\n\n=== OPENING PROJECT PAGE ===")
+            print("\n\n=== OPENING PROJECT PAGE ===")
             print(f"URL: {first_url}")
 
             await page.goto(first_url, wait_until="networkidle")

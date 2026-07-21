@@ -7,7 +7,7 @@ from services.logger_config import get_logger
 from bot.auth import owner_only
 from bot.keyboards import tg_analysis_keyboard, cancel_keyboard
 from db import queries
-from config import DB_PATH, OWNER_CHAT_ID
+from config import DB_PATH
 
 logger = get_logger(__name__)
 
@@ -156,7 +156,7 @@ async def process_channel_url(update: Update, context: ContextTypes.DEFAULT_TYPE
                 budgets.append(v.budget_max)
 
         if budgets:
-            text += f"\n**Бюджет:**\n"
+            text += "\n**Бюджет:**\n"
             text += f"• Мин: {min(budgets)} ₽\n"
             text += f"• Макс: {max(budgets)} ₽\n"
             text += f"• Средний: {sum(budgets) // len(budgets)} ₽\n"
@@ -170,7 +170,7 @@ async def process_channel_url(update: Update, context: ContextTypes.DEFAULT_TYPE
         if all_skills:
             from collections import Counter
             skill_counts = Counter(all_skills)
-            text += f"\n**Топ навыков:**\n"
+            text += "\n**Топ навыков:**\n"
             for skill, count in skill_counts.most_common(10):
                 text += f"• {skill}: {count}\n"
 
