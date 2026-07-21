@@ -1,0 +1,98 @@
+# Railway ignore file - files to exclude from deployment
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Database (will be in volume)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Telethon sessions (will be created on first run)
+*.session
+*.session-journal
+
+# Environment variables (configured in Railway)
+.env
+.env.local
+.env.*.local
+
+# Logs (will be in Railway console)
+logs/
+*.log
+
+# Data directory (will be in volume)
+data/
+debug/
+
+# Development and testing files
+test_*.py
+tests/
+docs/
+
+# Documentation (except README)
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# GitHub
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Archive files
+*.zip
+*.tar
+*.gz
+*.rar
+
+# Project specific
+freelance_radar_session.session
+frelancebot.zip
+debug_*.html
+debug_*.txt
+kwork_detail_text.txt
+search_detail.py

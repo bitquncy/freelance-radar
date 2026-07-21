@@ -1,0 +1,148 @@
+# ========================================
+# КОМАНДЫ ДЛЯ ДЕПЛОЯ НА RAILWAY
+# Копируйте и выполняйте по порядку
+# ========================================
+
+# ----------------------------------------
+# 1. ПОДГОТОВКА GIT РЕПОЗИТОРИЯ
+# ----------------------------------------
+
+cd C:\Users\Пользователь\Desktop\freelance-radar
+
+# Проверка статуса
+git status
+
+# Если git не инициализирован:
+git init
+
+# Добавить все файлы
+git add .
+
+# Сделать коммит
+git commit -m "Initial commit: FreelanceRadar bot ready for Railway deployment"
+
+# ----------------------------------------
+# 2. СОЗДАНИЕ GITHUB РЕПОЗИТОРИЯ
+# ----------------------------------------
+
+# Откройте в браузере:
+# https://github.com/new
+
+# Создайте репозиторий с именем: freelance-radar
+# Visibility: Private
+# НЕ выбирайте "Initialize with README"
+
+# ----------------------------------------
+# 3. ПОДКЛЮЧЕНИЕ К GITHUB
+# ----------------------------------------
+
+# ЗАМЕНИТЕ YOUR_USERNAME на ваш GitHub username!
+git remote add origin https://github.com/YOUR_USERNAME/freelance-radar.git
+
+# Проверка remote
+git remote -v
+
+# Переименовать ветку в main
+git branch -M main
+
+# Отправить код на GitHub
+git push -u origin main
+
+# ----------------------------------------
+# 4. НАСТРОЙКА RAILWAY
+# ----------------------------------------
+
+# Откройте в браузере:
+# https://railway.app/
+
+# 1. Login with GitHub
+# 2. New Project
+# 3. Deploy from GitHub repo
+# 4. Выберите: freelance-radar
+
+# ----------------------------------------
+# 5. RAILWAY VOLUME (ВАЖНО!)
+# ----------------------------------------
+
+# В Railway проекте:
+# Settings → Volumes → + Add Volume
+# Mount Path: /app/data
+# Size: 1 GB
+
+# ----------------------------------------
+# 6. RAILWAY VARIABLES
+# ----------------------------------------
+
+# В Railway проекте:
+# Variables → + New Variable
+
+# Добавьте (замените значения на реальные!):
+
+BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+OWNER_CHAT_ID=123456789
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+DB_PATH=/app/data/freelance_radar.db
+
+# Опционально (если используете Telethon):
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890
+
+# Настройки (можно оставить по умолчанию):
+KWORK_PROJECTS_URL=https://kwork.ru/projects
+KWORK_REQUEST_DELAY_MIN=2.0
+KWORK_REQUEST_DELAY_MAX=5.0
+KWORK_MAX_PAGES=1
+KWORK_MAX_DETAIL_PAGES=5
+MONITOR_INTERVAL_MINUTES=15
+DEFAULT_COOLDOWN_SEC=3600
+OPENAI_MODEL=gpt-4o-mini
+
+# ----------------------------------------
+# 7. ДЕПЛОЙ
+# ----------------------------------------
+
+# Railway автоматически начнёт деплой!
+# Следите за логами в Dashboard
+
+# ----------------------------------------
+# 8. ПРОВЕРКА
+# ----------------------------------------
+
+# В Telegram:
+# 1. Найдите вашего бота
+# 2. Отправьте: /start
+# 3. Должно появиться меню!
+
+# Проверьте статус:
+# /health
+
+# ----------------------------------------
+# 9. ОБНОВЛЕНИЕ БОТА (в будущем)
+# ----------------------------------------
+
+# После изменений в коде:
+git add .
+git commit -m "Update: описание изменений"
+git push origin main
+
+# Railway автоматически задеплоит новую версию!
+
+# ----------------------------------------
+# 10. ПОЛУЧЕНИЕ ТОКЕНОВ
+# ----------------------------------------
+
+# BOT_TOKEN:
+# Telegram → @BotFather → /newbot
+
+# OWNER_CHAT_ID:
+# Telegram → @userinfobot
+
+# OPENAI_API_KEY:
+# https://platform.openai.com/api-keys
+
+# TELEGRAM_API_ID и TELEGRAM_API_HASH:
+# https://my.telegram.org/apps
+
+# ----------------------------------------
+# ГОТОВО! 🎉
+# ----------------------------------------

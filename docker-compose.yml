@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: freelance-radar
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./freelance_radar.db:/app/freelance_radar.db
+      - ./freelance_radar_session.session:/app/freelance_radar_session.session
+    environment:
+      - DB_PATH=freelance_radar.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 30s
+    labels:
+      - "com.freelanceradar.version=1.0"
+      - "com.freelanceradar.description=FreelanceRadar Telegram Bot"

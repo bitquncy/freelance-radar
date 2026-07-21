@@ -1,0 +1,106 @@
+"""Project-wide constants and enums."""
+from enum import Enum
+
+
+class _StrEnum(str, Enum):
+    """Base class for string enums (compatible with Python 3.10+)."""
+    pass
+
+
+class Priority(_StrEnum):
+    """Vacancy priority levels."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class SourceType(_StrEnum):
+    """Source types for monitoring."""
+    KWORK = "kwork"
+    TELEGRAM = "telegram"
+
+
+class EntityType(_StrEnum):
+    """Entity types for blacklist."""
+    VACANCY = "vacancy"
+    CUSTOMER = "customer"
+
+
+class Complexity(_StrEnum):
+    """Complexity levels."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    UNKNOWN = "unknown"
+
+
+class FilterReason(_StrEnum):
+    """Filter reasons."""
+    BLACKLISTED = "blacklisted"
+    BUDGET_TOO_LOW = "budget_too_low"
+    BUDGET_TOO_HIGH = "budget_too_high"
+    BLACKLIST_WORD = "blacklist_word"
+    NO_WHITELIST = "no_whitelist_words_matched"
+    RATING_TOO_LOW = "customer_rating_too_low"
+    TOO_MANY_PROPOSALS = "too_many_proposals"
+    AI_SCORE_TOO_LOW = "ai_score_too_low"
+    MATCH_TOO_LOW = "match_too_low"
+    USER_BLACKLISTED = "user_blacklisted"
+
+
+class Status(_StrEnum):
+    """Vacancy status."""
+    NEW = "new"
+    ANALYZED = "analyzed"
+    FILTERED = "filtered"
+    RESPONDED = "responded"
+
+
+# Emoji mapping
+PRIORITY_EMOJI = {
+    Priority.HIGH: "\U0001f525",
+    Priority.MEDIUM: "\u2b50",
+    Priority.LOW: "\U0001f4cc",
+}
+
+PRIORITY_MAP = {
+    Priority.HIGH: ("\U0001f525", "High"),
+    Priority.MEDIUM: ("\u2b50", "Medium"),
+    Priority.LOW: ("\U0001f4cc", "Low"),
+}
+
+SOURCE_EMOJI = {
+    SourceType.KWORK: "\U0001f4bc",
+    SourceType.TELEGRAM: "\U0001f4e2",
+}
+
+STATUS_EMOJI = {
+    Status.NEW: "\U0001f195",
+    Status.ANALYZED: "\u2705",
+    Status.FILTERED: "\U0001f6ab",
+    Status.RESPONDED: "\U0001f4ac",
+}
+
+# Default values
+DEFAULT_MIN_SCORE = 30
+DEFAULT_MIN_MATCH = 20
+DEFAULT_SCORE_BASE = 10
+
+# Text formatting
+BULLET = "\u2022"
+
+# Limits
+MAX_VACANCIES_PER_PAGE = 5
+MAX_NOTIFICATION_CHARS = 200
+MAX_DESCRIPTION_CHARS = 400
+MAX_VACANCY_LIST = 100
+
+# Timeouts
+OPENAI_TIMEOUT = 30
+PLAYWRIGHT_TIMEOUT = 20000
+TELEGRAM_TIMEOUT = 30
+
+# Rate limits
+OPENAI_MAX_RPM = 20
+OPENAI_MIN_DELAY = 3.0
+KWORK_DAILY_LIMIT = 200
