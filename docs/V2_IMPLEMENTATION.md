@@ -1,0 +1,96 @@
+# V2: имплементация AGENTS.md — карта соответствия
+
+Дата: 25 июля 2026 · Ветка: `feature/agents-spec-v2` · Статус: MVP + Фаза 2 (bot-side)
+
+Этот документ фиксирует, какие разделы [AGENTS.md](../AGENTS.md) реализованы,
+какие решения приняты и что сознательно отложено. V2-слой включается флагом
+`RADAR_V2_ENABLED` и по умолчанию **выключен** — поведение существующего бота
+не меняется (§12.4: дисциплина scope).
+
+## Карта: спека → код
+
+| Раздел спеки | Реализация | Тесты |
+|---|---|---|
+| §3.1 Мониторинг, адаптеры `fetch() -> list[RawListing]` | `monitoring/adapters/` (base, kwork, telegram_channels, fl_ru) | `test_v2_adapters.py` |
+| §3.1 Дедупликация `(source, external_id)` + fuzzy | `monitoring/collector.py` | `test_v2_collector.py` |
+| §3.2 Экстракция (дешёвая модель, строгий JSON) | `core/generation.py::extract_listing` + `prompts/extraction_v1.md` | `test_v2_generation.py` |
+| §3.3 Скоринг вероятности (логистическая формула, без LLM) | `core/scoring.py::win_probability` + нормализация 5 признаков | `test_v2_scoring.py` |
+| §3.4 Выгодность, светофор 🟢🟡🔴 | `core/scoring.py::compute_profitability` | `test_v2_scoring.py` |
+| §3.5 Генерация отклика 80–150 слов, без клише, с CTA | `core/generation.py::generate_proposal` + `prompts/proposal_v1.md` | `test_v2_generation.py` |
+| §3.6 Адаптация портфолио (переранжирование кейсов + вводная строка) | `core/generation.py::select_relevant_cases`, `generate_portfolio_intro` | `test_v2_generation.py` |
+| §3.7 CRM-воронка (ровно по диаграмме) | `core/crm.py::ALLOWED_TRANSITIONS`, `change_stage` | `test_v2_crm.py` |
+| §3.8 Напоминания (48ч/24ч, «написать сейчас»/«отложить») | `core/crm.py` + `monitoring/worker.py::run_reminders_tick` | `test_v2_crm.py`, `test_v2_worker.py` |
+| §4.1 Пайплайн Collector → Scoring → Generation → Bot | `monitoring/worker.py::run_radar_tick` | `test_v2_worker.py` |
+| §4.2 PostgreSQL / SQLAlchemy async | `core/db.py` (DATABASE_URL: asyncpg в проде, aiosqlite в dev) | `test_v2_llm_db.py` |
+| §4.3 Структура репозитория | `core/`, `monitoring/`, `prompts/`, `alembic/` созданы | — |
+| §5 Модель данных (10 сущностей) | `core/models.py` | `test_v2_models.py`, `test_v2_migrations.py` |
+| §6.1–6.2 Две модели по стоимости | `core/llm.py` + `EXTRACTION_MODEL`/`GENERATION_MODEL` | `test_v2_llm_db.py` |
+| §6.3 Версионированные промпты в `prompts/` | `prompts/*.md`, `load_prompt()` | `test_v2_generation.py` |
+| §6.4 Guardrails (только PortfolioItem, ручная проверка, ретрай) | `core/generation.py::validate_proposal`, `GuardrailError` | `test_v2_generation.py` |
+| §7 Тарифы 299/599/999 ₽, лимиты, триал 7 дней | `core/tariffs.py` | `test_v2_tariffs.py` |
+| §7 Гейтинг в боте (источники, анализы, CRM, AI) | хендлеры + `monitoring/worker.py` (квоты) | `test_v2_handlers*.py`, `test_v2_worker.py` |
+| Бот: онбординг/портфолио/отклики/CRM/подписка | `bot/handlers/v2/` (`/radar`, `/portfolio`, `/clients`, `/subscription`, `/grant`) | `test_v2_handlers*.py` |
+| Alembic-миграции | `alembic/` + автогенерированная `66c6c53196b8` | `test_v2_migrations.py` |
+
+## Принятые решения (и почему)
+
+1. **Фиче-флаг `RADAR_V2_ENABLED`** — ноль незапрошенных изменений в проде
+   (§12.4). Диф в `main.py` минимален и полностью изолирован флагом.
+2. **Конфликт в спеке про автоотправку**: §2.4 говорит «только Business»,
+   §3.5 и §6.4 — «Pro/Business». Принято Pro/Business (двойное упоминание,
+   включая нормативный раздел guardrails); всегда opt-in + порог скоринга.
+3. **`ProjectAnalysis.user_id` добавлен** к упрощённой модели §5: вероятность
+   и выгодность считаются от профиля конкретного пользователя (§3.3), общая
+   запись анализа невозможна в multi-tenant.
+4. **`ExchangeConnection.settings` (JSON)** — несекретные настройки адаптера
+   (username TG-канала). Секреты по-прежнему только через `credentials_ref` (§5, §8).
+5. **Триал = уровень Pro** на 7 дней (в §7 уровень триала не специфицирован).
+6. **Частота опроса** (§12.7): V2-тик переиспользует `MONITOR_INTERVAL_MINUTES`
+   легаси-монитора; «приоритетная частота сканирования» Business реализована как
+   приоритет очереди уведомлений, а НЕ ускорение скрапинга — изменение частоты
+   требует отдельного согласования.
+7. **skill_match — эвристика** (пересечение навыков/тегов), не embeddings:
+   дорожная карта §14 прямо требует «эвристический скоринг без ML» для MVP;
+   интерфейс готов к замене на embedding-версию в Фазе 3.
+8. **Без LLM-ключа пайплайн работает**: экстракция падает обратно на бюджеты
+   из парсеров, Basic-шаблон отклика детерминированный. LLM обязателен только
+   для AI-генерации (Pro+).
+9. **«Отправка» отклика = фиксация в системе**: реальная публикация отклика на
+   бирже требует биржевых учёток пользователя (vault, §5 `credentials_ref`) и
+   отложена; кнопка «Отправлено» фиксирует факт, создаёт карточку CRM и
+   напоминание. Автоотправка (Pro+) в этой версии готовит и автоподтверждает
+   черновик, но не публикует на биржу.
+10. **Postgres через DATABASE_URL**: в dev/тестах — SQLite (aiosqlite), в
+    проде — `postgresql+asyncpg://` (§4.2). Alembic-миграция едина для обоих.
+11. **poetry не внедрён** (§9 упоминает `poetry install`): деплой Railway и CI
+    собираются от `requirements.txt`; конвертация — отдельная инфраструктурная
+    задача, чтобы не рисковать пайплайном деплоя в этом же изменении.
+
+## Отложено (по дорожной карте §14)
+
+- **Фаза 2:** Telegram Payments/ЮKassa (сейчас — ручной инвойс `/grant`,
+  ключи зарезервированы в конфиге), Weblancer-адаптер.
+- **Фаза 3:** веб-дашборд (`api/` FastAPI + `web/` Next.js), embedding-версия
+  skill_match, дообучение весов на личной истории (§3.3 «холодный старт»),
+  недельный отчёт Pro.
+- **Фаза 4:** командные аккаунты, экспорт Notion/Sheets, публичное API,
+  Upwork-адаптер, реальная автоотправка через биржевые учётки (vault).
+
+## Качество (§11, §12.1)
+
+- `pytest`: **340 passed** на ветке; 9 падений — те же 9, что были на `main`
+  до изменений (`tests/integration/test_monitor.py` ×7, `tests/unit/test_filters.py` ×2),
+  V2 их не трогает.
+- Покрытие новых модулей: **95%** (все файлы ≥90%).
+- `ruff check .`: чисто (на `main` было 3 ошибки).
+- `mypy --ignore-missing-imports .`: 801 ошибка против 810 на `main` — все
+  оставшиеся в легаси-коде; новые модули ошибок не содержат.
+
+## Что нельзя проверить автоматически (§12.6)
+
+- [ ] Живой прогон `/radar` онбординга в реальном Telegram (клавиатуры, эмодзи).
+- [ ] Реальный Kwork-скрапинг через Playwright под V2-адаптером (в тестах — моки, §11).
+- [ ] Реальные вызовы OpenRouter: качество экстракции и откликов на боевых моделях.
+- [ ] FL.ru: актуальность HTML-селекторов на живой странице.
+- [ ] Поведение на PostgreSQL под нагрузкой (миграция проверена на SQLite).
+- [ ] Визуальная проверка карточек (HTML-разметка) в клиентах Telegram.
