@@ -1,6 +1,6 @@
 """Unit tests for TelegramSourceParser send_message_to_chat."""
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from parsers.telegram_source import TelegramSourceParser
 

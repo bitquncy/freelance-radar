@@ -42,14 +42,14 @@ async def analyze_kwork():
 
         # Count all links
         links = await page.eval_on_selector_all("a[href]", "els => els.map(e => ({href: e.href, text: e.innerText.trim().slice(0,100), class: e.className}))")
-        project_links = [l for l in links if "/projects/" in l["href"] and "/view" in l["href"]]
+        project_links = [a for a in links if "/projects/" in a["href"] and "/view" in a["href"]]
         print(f"Total links: {len(links)}")
         print(f"Project links: {len(project_links)}")
         print("\nFirst 5 project links:")
-        for l in project_links[:5]:
-            print(f"  URL: {l['href']}")
-            print(f"  Text: {l['text'][:80]}")
-            print(f"  Class: {l['class'][:100]}")
+        for link in project_links[:5]:
+            print(f"  URL: {link['href']}")
+            print(f"  Text: {link['text'][:80]}")
+            print(f"  Class: {link['class'][:100]}")
             print()
 
         # Find card-like containers
