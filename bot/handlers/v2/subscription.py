@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import List
 
 from sqlalchemy import func, select
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     BaseHandler,
     CallbackQueryHandler,
@@ -36,9 +36,27 @@ TARIFF_TABLE = (
     "AI-отклики + адаптация портфолио, напоминания, недельный отчёт\n"
     "• Business — 999 ₽/мес: безлимит источников, варианты тона, команда до 3 мест, "
     "экспорт, приоритетное сканирование\n\n"
-    "Годовая оплата: −20%. Оплата на MVP — по инвойсу вручную, "
-    "Telegram Payments/ЮKassa подключаются в Фазе 2."
+    "Оплата картой — кнопками ниже (Telegram Payments, не покидая мессенджер)."
 )
+
+
+def _tariff_keyboard() -> InlineKeyboardMarkup:
+    """Buy buttons for the §7 tiers."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"💳 {TIER_TITLES[tier]} · {tariffs.PRICES_RUB[tier]} ₽/мес",
+                    callback_data=f"v2sub:buy:{tier.value}",
+                )
+            ]
+            for tier in (
+                SubscriptionTier.BASIC,
+                SubscriptionTier.PRO,
+                SubscriptionTier.BUSINESS,
+            )
+        ]
+    )
 
 
 async def subscription_info(
@@ -86,10 +104,14 @@ async def subscription_info(
         f"{TARIFF_TABLE}"
     )
     if update.message is not None:
-        await update.message.reply_text(text, parse_mode="HTML")
+        await update.message.reply_text(
+            text, parse_mode="HTML", reply_markup=_tariff_keyboard()
+        )
     elif update.callback_query is not None:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, parse_mode="HTML")
+        await update.callback_query.edit_message_text(
+            text, parse_mode="HTML", reply_markup=_tariff_keyboard()
+        )
 
 
 @owner_only

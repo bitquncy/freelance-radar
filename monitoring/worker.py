@@ -533,6 +533,78 @@ async def run_reminders_tick(
     return delivered
 
 
+async def run_weekly_report_tick(
+    application: Optional[Application],
+    session_factory: Optional[async_sessionmaker] = None,
+    notify: Optional[NotifyFn] = None,
+) -> int:
+    """Send the weekly digest to tiers that include it (§7: Pro/Business).
+
+    A compact, honest summary of the last 7 days: analyses, best win
+    probability, proposals sent, active CRM pipeline.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import and_
+
+    from core.models import Proposal, ProposalStatus
+
+    factory = session_factory or get_session_factory()
+    notify_fn: NotifyFn = notify or default_notify
+    week_ago = utcnow() - timedelta(days=7)
+    delivered = 0
+
+    async with factory() as session:
+        users = (await session.execute(select(User))).scalars().all()
+        for user in users:
+            tier = tariffs.effective_tier(user)
+            limits = tariffs.get_limits(tier)
+            if limits is None or not limits.weekly_report:
+                continue
+            analyses = (
+                await session.execute(
+                    select(
+                        func.count(ProjectAnalysis.id),
+                        func.max(ProjectAnalysis.win_probability),
+                    ).where(
+                        ProjectAnalysis.user_id == user.id,
+                        ProjectAnalysis.computed_at >= week_ago,
+                    )
+                )
+            ).one()
+            proposals_sent = (
+                await session.execute(
+                    select(func.count(Proposal.id)).where(
+                        and_(
+                            Proposal.user_id == user.id,
+                            Proposal.status == ProposalStatus.SENT,
+                            Proposal.sent_at >= week_ago,
+                        )
+                    )
+                )
+            ).scalar_one()
+            active_clients = await crm.count_active_clients(session, user.id)
+            if not analyses[0] and not proposals_sent and not active_clients:
+                continue  # nothing to report — no noise (§3.8 spirit)
+            best = (
+                f"{analyses[1]:.0f}%" if analyses[1] is not None else "—"
+            )
+            text = (
+                "📊 <b>Неделя в FreelanceRadar</b>\n"
+                f"Проанализировано заказов: <b>{analyses[0]}</b>\n"
+                f"Лучшая вероятность: <b>{best}</b>\n"
+                f"Откликов отправлено: <b>{proposals_sent}</b>\n"
+                f"Активных клиентов в CRM: <b>{active_clients}</b>\n\n"
+                "Продуктивной недели! /radar"
+            )
+            result = await notify_fn(application, user.telegram_id, text, None)
+            if result is not False:
+                delivered += 1
+    if delivered:
+        logger.info("v2.weekly_reports_sent", count=delivered)
+    return delivered
+
+
 def register_v2_jobs(scheduler: object, application: Application) -> None:
     """Register V2 periodic jobs on the existing APScheduler instance.
 
@@ -563,5 +635,17 @@ def register_v2_jobs(scheduler: object, application: Application) -> None:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=JOB_MISFIRE_GRACE_SECONDS,
+    )
+    scheduler.add_job(  # type: ignore[attr-defined]
+        run_weekly_report_tick,
+        "cron",
+        day_of_week="mon",
+        hour=6,  # 09:00 МСК
+        minute=0,
+        args=[application],
+        id="v2_weekly_report",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     logger.info("v2.jobs_registered", interval_minutes=interval)
