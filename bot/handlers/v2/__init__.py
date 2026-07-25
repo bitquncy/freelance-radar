@@ -18,9 +18,12 @@ def register_v2_handlers(application: Application) -> None:
     from bot.handlers.v2.sources import get_source_handlers
     from bot.handlers.v2.subscription import get_subscription_handlers
 
+    # Conversations survive restarts only when the application has a
+    # persistence backend configured (main.py wires PicklePersistence).
+    persistent = application.persistence is not None
     handlers = (
-        get_onboarding_handlers()
-        + get_portfolio_handlers()
+        get_onboarding_handlers(persistent=persistent)
+        + get_portfolio_handlers(persistent=persistent)
         + get_source_handlers()
         + get_proposal_handlers()
         + get_crm_handlers()

@@ -75,7 +75,9 @@ def project_card(project: Project, analysis: Optional[ProjectAnalysis]) -> str:
             lines.append(f"\U0001f6a9 Красные флаги: {flags}")
         if analysis.summary:
             lines.append(f"\U0001f4dd {esc(analysis.summary[:200])}")
-    if project.url:
+    # Only http(s) links: a scraped URL with an exotic scheme would make
+    # Telegram reject the whole message (silent notification loss).
+    if project.url and project.url.startswith(("http://", "https://")):
         lines.append(f'<a href="{esc(project.url)}">Открыть заказ</a>')
     return "\n".join(lines)
 

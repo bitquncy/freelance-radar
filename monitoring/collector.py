@@ -9,9 +9,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from difflib import SequenceMatcher
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import Project, utcnow
@@ -114,14 +115,14 @@ class Collector:
         """
         result = CollectResult()
         recent = await self._load_recent(session)
-        seen_this_run: List[Tuple[str, str]] = []
+        seen_this_run: Set[Tuple[str, str]] = set()
 
         for listing in listings:
             key = (listing.source.value, listing.external_id)
             if key in seen_this_run:
                 result.duplicates_exact += 1
                 continue
-            seen_this_run.append(key)
+            seen_this_run.add(key)
 
             if await self._exists_exact(session, listing):
                 result.duplicates_exact += 1
@@ -154,8 +155,21 @@ class Collector:
                 url=listing.url,
                 raw_payload=listing.raw_payload,
             )
-            session.add(project)
-            await session.flush()
+            # Savepoint per insert: a concurrent tick (multi-worker deploy)
+            # inserting the same (source, external_id) must not kill the
+            # whole batch — the loser is just a duplicate (§3.1).
+            try:
+                async with session.begin_nested():
+                    session.add(project)
+                    await session.flush()
+            except IntegrityError:
+                result.duplicates_exact += 1
+                logger.info(
+                    "collector.concurrent_duplicate",
+                    source=listing.source.value,
+                    external_id=listing.external_id,
+                )
+                continue
             recent.append(project)
             result.new_projects.append(project)
 

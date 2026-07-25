@@ -26,9 +26,20 @@ class BlacklistService:
 
         Returns:
             True if entity is blacklisted and not expired, False otherwise.
+            An uninitialized database (missing table) degrades to False —
+            filtering must not crash the monitoring pipeline.
         """
-        async with aiosqlite.connect(self.db_path) as db:
-            result = await queries.is_blacklisted(db, entity_type, entity_id)
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                result = await queries.is_blacklisted(db, entity_type, entity_id)
+        except aiosqlite.OperationalError as exc:
+            logger.warning(
+                "blacklist.check_degraded",
+                entity_type=entity_type,
+                entity_id=entity_id,
+                error=str(exc),
+            )
+            return False
         logger.debug(
             "blacklist.checked",
             entity_type=entity_type,

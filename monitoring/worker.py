@@ -1,5 +1,17 @@
 """V2 worker: periodic collect→analyze→score→notify pipeline (§4.1, §6.2).
 
+Transaction design (audit fixes):
+    * Network I/O (scraping, LLM, Telegram) is NEVER performed inside an open
+      DB transaction. Phases: fetch → short collect tx → per-(project, user)
+      short analyze tx → notify strictly AFTER commit.
+    * Extraction runs ONCE per listing (§3.2) and is reused for every
+      matching user — scoring is the only per-user part.
+    * Idempotency is DB-enforced: unique ``(project_id, user_id)`` on
+      analyses makes a restarted/concurrent tick converge instead of
+      duplicating notifications.
+    * Reminders are at-most-once (§3.8): status is committed BEFORE the
+      notification is sent, so a crash never re-pings the user.
+
 Scheduling notes (AGENTS.md §12.7): the V2 tick reuses the SAME
 ``MONITOR_INTERVAL_MINUTES`` cadence as the legacy monitor — polling
 frequency is never increased without explicit approval. "Priority scanning"
@@ -7,9 +19,10 @@ for Business (§7) affects notification ordering only, not scrape frequency.
 """
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Awaitable, Callable, Dict, List, Optional, Sequence
+from typing import Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telegram import InlineKeyboardMarkup
 from telegram.error import TelegramError
@@ -18,8 +31,9 @@ from telegram.ext import Application
 from core import crm, tariffs
 from core.db import get_session_factory
 from core.generation import ExtractionResult, extract_listing, fallback_extraction
-from core.llm import OpenRouterClient, get_default_llm_client
+from core.llm import OpenRouterClient, get_shared_llm_client
 from core.models import (
+    Client,
     ConnectionStatus,
     ExchangeConnection,
     Platform,
@@ -27,6 +41,7 @@ from core.models import (
     Project,
     ProjectAnalysis,
     Reminder,
+    ReminderStatus,
     User,
     utcnow,
 )
@@ -37,7 +52,13 @@ from services.logger_config import get_logger
 
 logger = get_logger(__name__)
 
-NotifyFn = Callable[..., Awaitable[None]]
+#: Notification callable; must return ``False`` on delivery failure.
+NotifyFn = Callable[..., Awaitable[Optional[bool]]]
+
+#: Tolerate scheduler lateness up to this many seconds instead of silently
+#: dropping a tick (APScheduler default misfire_grace_time=1s is too strict
+#: for long Playwright/LLM ticks). This does NOT increase polling frequency.
+JOB_MISFIRE_GRACE_SECONDS = 300
 
 
 @dataclass
@@ -48,6 +69,7 @@ class TickStats:
     new_projects: int = 0
     analyses: int = 0
     notifications: int = 0
+    notify_failures: int = 0
     skipped_quota: int = 0
     errors: List[str] = field(default_factory=list)
 
@@ -57,8 +79,13 @@ async def default_notify(
     chat_id: int,
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
-) -> None:
-    """Send a notification through the bot (HTML parse mode)."""
+) -> bool:
+    """Send a notification through the bot (HTML parse mode).
+
+    Returns:
+        ``True`` on success, ``False`` on delivery failure (logged) — the
+        caller must not count a failed delivery as a sent notification.
+    """
     try:
         await application.bot.send_message(
             chat_id=chat_id,
@@ -67,8 +94,10 @@ async def default_notify(
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
+        return True
     except (TelegramError, ValueError, TypeError) as exc:
         logger.error("v2.notify_failed", chat_id=chat_id, error=str(exc))
+        return False
 
 
 async def _load_active_connections(
@@ -154,30 +183,30 @@ async def _analysis_exists(
     return result.scalar_one_or_none() is not None
 
 
-async def analyze_project_for_user(
-    session: AsyncSession,
+async def extract_for_project(
     project: Project,
-    user: User,
     llm: Optional[OpenRouterClient],
     extraction_model: str,
-) -> ProjectAnalysis:
-    """Run extraction (§3.2) + scoring (§3.3–3.4) and persist the analysis."""
-    if llm is not None:
-        extraction: ExtractionResult = await extract_listing(
-            f"{project.title}\n\n{project.description_raw}", llm, extraction_model
-        )
-    else:
-        extraction = fallback_extraction(project)
+) -> ExtractionResult:
+    """Run extraction ONCE for a listing (§3.2) — user-independent.
 
-    portfolio = (
-        (
-            await session.execute(
-                select(PortfolioItem).where(PortfolioItem.user_id == user.id)
-            )
-        )
-        .scalars()
-        .all()
+    Uses the cheap model when an LLM client is configured, otherwise the
+    deterministic parser-field fallback (MVP no-LLM mode).
+    """
+    if llm is None:
+        return fallback_extraction(project)
+    return await extract_listing(
+        f"{project.title}\n\n{project.description_raw}", llm, extraction_model
     )
+
+
+def build_analysis(
+    project: Project,
+    user: User,
+    extraction: ExtractionResult,
+    portfolio: Sequence[PortfolioItem],
+) -> ProjectAnalysis:
+    """Build the per-user analysis row from a shared extraction (§3.3–3.4)."""
     analysis = ProjectAnalysis(
         project_id=project.id,
         user_id=user.id,
@@ -191,9 +220,7 @@ async def analyze_project_for_user(
         needs_manual_review=extraction.needs_manual_review,
         estimated_hours=estimate_hours(project.category, extraction.deadline_days),
     )
-    score: ScoreResult = score_project(
-        project, user, portfolio, analysis=analysis
-    )
+    score: ScoreResult = score_project(project, user, portfolio, analysis=analysis)
     analysis.needs_manual_review = (
         analysis.needs_manual_review or score.needs_manual_review
     )
@@ -203,9 +230,108 @@ async def analyze_project_for_user(
         analysis.effective_hourly_rate = score.profitability.effective_hourly_rate
         analysis.net_payout = score.profitability.net_payout
         analysis.estimated_hours = score.profitability.estimated_hours
+    return analysis
+
+
+async def analyze_project_for_user(
+    session: AsyncSession,
+    project: Project,
+    user: User,
+    llm: Optional[OpenRouterClient],
+    extraction_model: str,
+    extraction: Optional[ExtractionResult] = None,
+) -> ProjectAnalysis:
+    """Extraction (reused when provided) + scoring; persists the analysis.
+
+    Kept as a public seam for handlers/tests; the tick passes a precomputed
+    ``extraction`` so the LLM is called once per listing (§3.2).
+    """
+    if extraction is None:
+        extraction = await extract_for_project(project, llm, extraction_model)
+    portfolio = (
+        (
+            await session.execute(
+                select(PortfolioItem).where(PortfolioItem.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    analysis = build_analysis(project, user, extraction, portfolio)
     session.add(analysis)
     await session.flush()
     return analysis
+
+
+def _connection_priority(
+    connection: ExchangeConnection, users_by_id: Dict[int, User]
+) -> int:
+    """Business first (§7): priority is notification ORDER, not scrape rate."""
+    user = users_by_id.get(connection.user_id)
+    if user is None:
+        return 1
+    tier = tariffs.effective_tier(user)
+    limits = tariffs.get_limits(tier)
+    return 0 if limits is not None and limits.priority_scan else 1
+
+
+async def _fetch_listings(
+    adapters: Sequence[SourceAdapter], stats: TickStats
+) -> List[RawListing]:
+    """Fetch from every adapter, isolating per-source failures (§3.1)."""
+    listings: List[RawListing] = []
+    for adapter in adapters:
+        try:
+            listings.extend(await adapter.fetch())
+        except Exception as exc:  # noqa: BLE001 - isolate any source failure
+            stats.errors.append(f"{adapter.platform.value}: {exc}")
+            logger.error(
+                "v2.adapter_failed",
+                platform=adapter.platform.value,
+                error=str(exc),
+            )
+    return listings
+
+
+async def _close_adapters(adapters: Sequence[SourceAdapter]) -> None:
+    """Release adapter resources (httpx pools, TG sessions) after a tick."""
+    for adapter in adapters:
+        try:
+            await adapter.close()
+        except Exception as exc:  # noqa: BLE001 - closing must never raise
+            logger.warning(
+                "v2.adapter_close_failed",
+                platform=adapter.platform.value,
+                error=str(exc),
+            )
+
+
+async def _persist_analysis(
+    factory: async_sessionmaker,
+    project: Project,
+    user: User,
+    extraction: ExtractionResult,
+) -> Optional[ProjectAnalysis]:
+    """Short transaction: build + insert one analysis, commit.
+
+    Returns ``None`` when a concurrent tick already inserted the pair
+    (unique ``project_id+user_id``) — the caller must then skip notification.
+    """
+    async with factory() as session:
+        try:
+            analysis = await analyze_project_for_user(
+                session, project, user, None, "", extraction=extraction
+            )
+            await session.commit()
+            return analysis
+        except IntegrityError:
+            await session.rollback()
+            logger.info(
+                "v2.analysis_concurrent_duplicate",
+                project_id=project.id,
+                user_id=user.id,
+            )
+            return None
 
 
 async def run_radar_tick(
@@ -231,35 +357,11 @@ async def run_radar_tick(
     model = extraction_model or cfg.EXTRACTION_MODEL
     stats = TickStats()
 
+    # Phase 0: read connections + users (short read-only session).
     async with factory() as session:
-        connections = await _load_active_connections(session)
+        connections = list(await _load_active_connections(session))
         if not connections:
             return stats
-
-        active_adapters = (
-            list(adapters) if adapters is not None else build_adapters(connections)
-        )
-        listings: List[RawListing] = []
-        for adapter in active_adapters:
-            try:
-                fetched = await adapter.fetch()
-                listings.extend(fetched)
-            except Exception as exc:  # noqa: BLE001 - isolate any source failure
-                stats.errors.append(f"{adapter.platform.value}: {exc}")
-                logger.error(
-                    "v2.adapter_failed",
-                    platform=adapter.platform.value,
-                    error=str(exc),
-                )
-        stats.listings_fetched = len(listings)
-
-        client = llm if llm is not None else (
-            get_default_llm_client() if auto_llm else None
-        )
-
-        collect_result = await Collector().collect(session, listings)
-        stats.new_projects = len(collect_result.new_projects)
-
         users_by_id: Dict[int, User] = {}
         for connection in connections:
             if connection.user_id not in users_by_id:
@@ -267,61 +369,128 @@ async def run_radar_tick(
                 if user is not None:
                     users_by_id[connection.user_id] = user
 
-        # Business tier first (§7: priority scanning = notification priority).
-        def _priority(conn: ExchangeConnection) -> int:
-            user = users_by_id.get(conn.user_id)
-            tier = tariffs.effective_tier(user) if user else None
-            return 0 if tier and tariffs.get_limits(tier).priority_scan else 1  # type: ignore[union-attr]
+    # Phase 1: fetch listings — network only, no open transaction.
+    adapters_owned = adapters is None
+    active_adapters = (
+        list(adapters) if adapters is not None else build_adapters(connections)
+    )
+    try:
+        listings = await _fetch_listings(active_adapters, stats)
+    finally:
+        if adapters_owned:
+            await _close_adapters(active_adapters)
+    stats.listings_fetched = len(listings)
 
-        ordered_connections = sorted(connections, key=_priority)
+    # Phase 2: collect (short transaction, committed immediately).
+    async with factory() as session:
+        collect_result = await Collector().collect(session, listings)
+        await session.commit()
+    new_projects = collect_result.new_projects
+    stats.new_projects = len(new_projects)
+    if not new_projects:
+        logger.info("v2.tick_done", **_tick_log_fields(stats))
+        return stats
 
-        for project in collect_result.new_projects:
-            notified_users = set()
-            for connection in ordered_connections:
-                user = users_by_id.get(connection.user_id)
-                if user is None or user.id in notified_users:
-                    continue
-                if not connection_matches_project(connection, project):
-                    continue
-                tier = tariffs.effective_tier(user)
-                if tier is None:
-                    continue
+    client = llm if llm is not None else (
+        get_shared_llm_client() if auto_llm else None
+    )
+    ordered_connections = sorted(
+        connections, key=lambda c: _connection_priority(c, users_by_id)
+    )
+
+    # Phase 3: per (project, user) — extract once per project, short
+    # analyze transactions, notify strictly after commit.
+    for project in new_projects:
+        extraction: Optional[ExtractionResult] = None
+        handled_users: Set[int] = set()
+        for connection in ordered_connections:
+            user = users_by_id.get(connection.user_id)
+            if user is None or user.id in handled_users:
+                continue
+            if not connection_matches_project(connection, project):
+                continue
+            handled_users.add(user.id)
+            tier = tariffs.effective_tier(user)
+            if tier is None:
+                continue
+            async with factory() as session:
                 if await _analysis_exists(session, project.id, user.id):
                     continue
                 used = await _analyses_used_this_month(session, user.id)
-                if not tariffs.can_analyze(tier, used):
-                    stats.skipped_quota += 1
-                    continue
-                analysis = await analyze_project_for_user(
-                    session, project, user, client, model
+            if not tariffs.can_analyze(tier, used):
+                stats.skipped_quota += 1
+                continue
+            if extraction is None:
+                # §3.2: ONE extraction per listing, reused for all users.
+                extraction = await extract_for_project(project, client, model)
+            analysis = await _persist_analysis(factory, project, user, extraction)
+            if analysis is None:
+                continue
+            stats.analyses += 1
+            if application is not None or notify is not None:
+                from bot.handlers.v2.cards import (
+                    project_card,
+                    project_card_keyboard,
                 )
-                stats.analyses += 1
-                notified_users.add(user.id)
-                if application is not None or notify is not None:
-                    from bot.handlers.v2.cards import (
-                        project_card,
-                        project_card_keyboard,
-                    )
 
-                    await notify_fn(
-                        application,
-                        user.telegram_id,
-                        project_card(project, analysis),
-                        project_card_keyboard(project.id),
-                    )
+                delivered = await notify_fn(
+                    application,
+                    user.telegram_id,
+                    project_card(project, analysis),
+                    project_card_keyboard(project.id),
+                )
+                if delivered is False:
+                    stats.notify_failures += 1
+                else:
                     stats.notifications += 1
-        await session.commit()
 
-    logger.info(
-        "v2.tick_done",
-        fetched=stats.listings_fetched,
-        new=stats.new_projects,
-        analyses=stats.analyses,
-        notified=stats.notifications,
-        quota_skipped=stats.skipped_quota,
-        errors=len(stats.errors),
-    )
+    logger.info("v2.tick_done", **_tick_log_fields(stats))
     return stats
+
+
+def _tick_log_fields(stats: TickStats) -> Dict[str, int]:
+    return {
+        "fetched": stats.listings_fetched,
+        "new": stats.new_projects,
+        "analyses": stats.analyses,
+        "notified": stats.notifications,
+        "notify_failures": stats.notify_failures,
+        "quota_skipped": stats.skipped_quota,
+        "errors": len(stats.errors),
+    }
+
+
+async def _claim_due_reminder(
+    factory: async_sessionmaker, reminder_id: int
+) -> Optional[Tuple[Reminder, Client, User]]:
+    """Atomically mark one reminder NOTIFIED and commit (at-most-once, §3.8).
+
+    Returns the loaded rows for notification, or ``None`` when the reminder
+    is no longer eligible (already handled, tariff without reminders, or
+    orphaned rows — those are completed silently).
+    """
+    async with factory() as session:
+        reminder = await session.get(Reminder, reminder_id)
+        if reminder is None or reminder.status is not ReminderStatus.PENDING:
+            return None
+        client_row = await session.get(Client, reminder.client_id)
+        if client_row is None:
+            await crm.complete_reminder(session, reminder)
+            await session.commit()
+            return None
+        user = await session.get(User, client_row.user_id)
+        if user is None:
+            await crm.complete_reminder(session, reminder)
+            await session.commit()
+            return None
+        tier = tariffs.effective_tier(user)
+        if not tariffs.can_use_reminders(tier):
+            await crm.complete_reminder(session, reminder)
+            await session.commit()
+            return None
+        await crm.mark_notified(session, reminder)
+        await session.commit()
+        return reminder, client_row, user
 
 
 async def run_reminders_tick(
@@ -329,38 +498,33 @@ async def run_reminders_tick(
     session_factory: Optional[async_sessionmaker] = None,
     notify: Optional[NotifyFn] = None,
 ) -> int:
-    """Deliver due reminders (§3.8): one notification, then wait for action."""
+    """Deliver due reminders (§3.8): status committed BEFORE sending.
+
+    At-most-once semantics: a crash between commit and send loses at most
+    one ping but never re-pings the user (§3.8 forbids repeated escalation).
+    """
     factory = session_factory or get_session_factory()
     notify_fn: NotifyFn = notify or default_notify
     delivered = 0
     async with factory() as session:
         due: Sequence[Reminder] = await crm.find_due_reminders(session)
-        for reminder in due:
-            client_row = await session.get(
-                crm.Client, reminder.client_id  # type: ignore[arg-type]
-            )
-            if client_row is None:
-                await crm.complete_reminder(session, reminder)
-                continue
-            user = await session.get(User, client_row.user_id)
-            if user is None:
-                await crm.complete_reminder(session, reminder)
-                continue
-            tier = tariffs.effective_tier(user)
-            if not tariffs.can_use_reminders(tier):
-                await crm.complete_reminder(session, reminder)
-                continue
-            from bot.handlers.v2.cards import reminder_card, reminder_keyboard
+        due_ids = [reminder.id for reminder in due]
 
-            await notify_fn(
-                application,
-                user.telegram_id,
-                reminder_card(client_row, reminder),
-                reminder_keyboard(reminder.id, client_row.id),
-            )
-            await crm.mark_notified(session, reminder)
+    for reminder_id in due_ids:
+        claimed = await _claim_due_reminder(factory, reminder_id)
+        if claimed is None:
+            continue
+        reminder, client_row, user = claimed
+        from bot.handlers.v2.cards import reminder_card, reminder_keyboard
+
+        result = await notify_fn(
+            application,
+            user.telegram_id,
+            reminder_card(client_row, reminder),
+            reminder_keyboard(reminder.id, client_row.id),
+        )
+        if result is not False:
             delivered += 1
-        await session.commit()
     if delivered:
         logger.info("v2.reminders_delivered", count=delivered)
     return delivered
@@ -369,7 +533,10 @@ async def run_reminders_tick(
 def register_v2_jobs(scheduler: object, application: Application) -> None:
     """Register V2 periodic jobs on the existing APScheduler instance.
 
-    Cadence intentionally mirrors the legacy monitor (§12.7).
+    Cadence intentionally mirrors the legacy monitor (§12.7). A generous
+    ``misfire_grace_time`` prevents silently dropped ticks when a previous
+    run (Playwright + LLM) finishes slightly late; ``coalesce`` collapses a
+    backlog into a single run instead of a burst.
     """
     from config import get_config
 
@@ -380,6 +547,9 @@ def register_v2_jobs(scheduler: object, application: Application) -> None:
         minutes=interval,
         args=[application],
         id="v2_radar_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=JOB_MISFIRE_GRACE_SECONDS,
     )
     scheduler.add_job(  # type: ignore[attr-defined]
         run_reminders_tick,
@@ -387,5 +557,8 @@ def register_v2_jobs(scheduler: object, application: Application) -> None:
         minutes=10,
         args=[application],
         id="v2_reminders_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=JOB_MISFIRE_GRACE_SECONDS,
     )
     logger.info("v2.jobs_registered", interval_minutes=interval)

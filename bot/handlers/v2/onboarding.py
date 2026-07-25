@@ -137,8 +137,13 @@ async def onboarding_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ConversationHandler.END
 
 
-def get_onboarding_handlers() -> List[BaseHandler]:
-    """Build onboarding handlers."""
+def get_onboarding_handlers(persistent: bool = False) -> List[BaseHandler]:
+    """Build onboarding handlers.
+
+    Args:
+        persistent: Persist conversation state across restarts (requires an
+            application-level persistence backend).
+    """
     conversation = ConversationHandler(
         entry_points=[CommandHandler("radar", radar_entry)],
         states={
@@ -150,5 +155,6 @@ def get_onboarding_handlers() -> List[BaseHandler]:
         },
         fallbacks=[CommandHandler("cancel", onboarding_cancel)],
         name="v2_onboarding",
+        persistent=persistent,
     )
     return [conversation]

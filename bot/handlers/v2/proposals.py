@@ -9,6 +9,7 @@ the bot never posts anywhere on the user's behalf.
 from typing import List, Optional, Tuple
 
 from sqlalchemy import desc, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import BaseHandler, CallbackQueryHandler, ContextTypes
@@ -26,7 +27,7 @@ from core.generation import (
     select_relevant_cases,
     validate_proposal,
 )
-from core.llm import LLMError, get_default_llm_client
+from core.llm import LLMError, get_shared_llm_client
 from core.models import (
     PortfolioItem,
     Project,
@@ -74,7 +75,7 @@ async def _build_proposal_text(
     """Produce proposal text per tariff (§7): template for Basic, AI for Pro+."""
     project_text = f"{project.title}\n\n{project.description_raw}"
     required = list(analysis.extracted_skills) if analysis is not None else []
-    llm = get_default_llm_client() if ai_enabled else None
+    llm = get_shared_llm_client() if ai_enabled else None
     if ai_enabled and llm is not None:
         from config import get_config
 
@@ -195,11 +196,23 @@ async def proposal_regenerate(
 async def proposal_edit_start(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle «✏️ Редактировать» — ask for replacement text."""
+    """Handle «✏️ Редактировать» — ask for replacement text.
+
+    Ownership is verified HERE (not only on apply): callback data carries a
+    raw id that a user could forge.
+    """
     query = update.callback_query
-    if query is None or query.data is None:
+    if query is None or query.data is None or update.effective_user is None:
         return
     proposal_id = int(query.data.split(":")[2])
+    factory = get_session_factory()
+    async with factory() as session:
+        user, _ = await get_or_create_user(session, update.effective_user)
+        proposal = await session.get(Proposal, proposal_id)
+        if proposal is None or proposal.user_id != user.id:
+            await query.answer("Черновик не найден.", show_alert=True)
+            return
+        await session.commit()
     pending(context)["v2_edit_proposal"] = proposal_id
     await query.answer()
     await query.message.reply_text(  # type: ignore[union-attr]
@@ -254,15 +267,28 @@ async def proposal_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if proposal is None or proposal.user_id != user.id:
             await query.answer("Черновик не найден.", show_alert=True)
             return
-        if proposal.status is ProposalStatus.SENT:
+        # Atomic claim: only ONE of two racing taps flips DRAFT/EDITED→SENT
+        # and runs the CRM side effects (idempotent double-tap).
+        claim = await session.execute(
+            sa_update(Proposal)
+            .where(
+                Proposal.id == proposal_id,
+                Proposal.user_id == user.id,
+                Proposal.status != ProposalStatus.SENT,
+            )
+            .values(status=ProposalStatus.SENT, sent_at=utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        if claim.rowcount == 0:
+            await session.rollback()
             await query.answer("Уже отмечен отправленным.")
             return
+        await session.refresh(proposal)
         project = await session.get(Project, proposal.project_id)
         if project is None:
+            await session.rollback()
             await query.answer("Заказ не найден.", show_alert=True)
             return
-        proposal.status = ProposalStatus.SENT
-        proposal.sent_at = utcnow()
 
         crm_note = ""
         active = await crm.count_active_clients(session, user.id)
@@ -329,7 +355,7 @@ async def proposal_cases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         project_text = f"{project.title}\n\n{project.description_raw}"
         cases = select_relevant_cases(portfolio, required, project_text)
         intro = ""
-        llm = get_default_llm_client()
+        llm = get_shared_llm_client()
         if llm is not None:
             try:
                 from config import get_config

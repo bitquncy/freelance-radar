@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Set
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import (
@@ -158,22 +159,35 @@ async def upsert_client_for_proposal(
     """
     moment = now or utcnow()
     platform_client_id = f"{project.source.value}:{project.external_id}"
-    result = await session.execute(
-        select(Client).where(
-            Client.user_id == user.id,
-            Client.platform_client_id == platform_client_id,
+
+    async def _find() -> Optional[Client]:
+        result = await session.execute(
+            select(Client).where(
+                Client.user_id == user.id,
+                Client.platform_client_id == platform_client_id,
+            )
         )
-    )
-    client = result.scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+    client = await _find()
     if client is None:
-        client = Client(
-            user_id=user.id,
-            platform_client_id=platform_client_id,
-            name=f"Заказчик: {project.title[:60]}",
-            pipeline_stage=PipelineStage.NEW_LEAD,
-        )
-        session.add(client)
-        await session.flush()
+        # Savepoint + retry: a concurrent send of the same proposal must
+        # converge on ONE card (unique user_id+platform_client_id).
+        try:
+            async with session.begin_nested():
+                client = Client(
+                    user_id=user.id,
+                    platform_client_id=platform_client_id,
+                    name=f"Заказчик: {project.title[:60]}",
+                    pipeline_stage=PipelineStage.NEW_LEAD,
+                )
+                session.add(client)
+                await session.flush()
+        except IntegrityError:
+            existing = await _find()
+            if existing is None:  # pragma: no cover - constraint guarantees it
+                raise
+            client = existing
     if client.pipeline_stage is PipelineStage.NEW_LEAD:
         client.pipeline_stage = PipelineStage.PROPOSAL_SENT
     await log_interaction(

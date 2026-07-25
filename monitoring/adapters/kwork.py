@@ -16,7 +16,15 @@ logger = get_logger(__name__)
 
 
 def vacancy_to_listing(vacancy: JobVacancy, platform: Platform) -> RawListing:
-    """Map a legacy ``JobVacancy`` to a V2 ``RawListing``."""
+    """Map a legacy ``JobVacancy`` to a V2 ``RawListing``.
+
+    ``posted_at`` is intentionally ``None``: the legacy parser records only
+    the SCRAPE time (local-naive ``datetime.now()``), not the publication
+    time. Feeding scrape time into the §3.3 freshness feature both skews it
+    (naive local vs naive UTC) and makes every listing look brand new —
+    ``None`` yields an honest neutral 0.5 instead. Real publication time is
+    a per-source parser improvement (tracked in docs).
+    """
     return RawListing(
         source=platform,
         external_id=str(vacancy.kwork_id),
@@ -29,9 +37,15 @@ def vacancy_to_listing(vacancy: JobVacancy, platform: Platform) -> RawListing:
         proposals_count=vacancy.proposals_count,
         client_rating=vacancy.customer_rating,
         client_orders=vacancy.customer_orders,
-        posted_at=vacancy.fetched_at,
+        posted_at=None,
         url=vacancy.url,
-        raw_payload={"deadline": vacancy.deadline, "skills": vacancy.skills_list},
+        raw_payload={
+            "deadline": vacancy.deadline,
+            "skills": vacancy.skills_list,
+            "fetched_at": vacancy.fetched_at.isoformat()
+            if vacancy.fetched_at
+            else None,
+        },
     )
 
 

@@ -66,10 +66,32 @@ def set_session_factory(
 
 
 async def init_v2_db(engine: Optional[AsyncEngine] = None) -> None:
-    """Create all V2 tables (dev/SQLite path; prod uses Alembic)."""
+    """Create all V2 tables directly (tests/dev tooling ONLY).
+
+    Production startup must use :func:`run_v2_migrations` — ``create_all``
+    bypasses ``alembic_version`` and breaks every future schema migration.
+    """
     eng = engine or get_engine()
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+def run_v2_migrations() -> None:
+    """Apply Alembic migrations up to head (the production schema path).
+
+    Runs synchronously BEFORE the bot's event loop starts (alembic's async
+    env calls ``asyncio.run`` internally). Works for SQLite and PostgreSQL
+    alike, and records ``alembic_version`` so future upgrades apply cleanly.
+    """
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+
+    root = Path(__file__).resolve().parent.parent
+    config = AlembicConfig(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "alembic"))
+    command.upgrade(config, "head")
 
 
 async def dispose_engine() -> None:

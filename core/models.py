@@ -25,10 +25,12 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -171,6 +173,18 @@ class ExchangeConnection(Base):
     """
 
     __tablename__ = "exchange_connections"
+    __table_args__ = (
+        # One connection per exchange per user; TG channels may repeat
+        # (channel username lives in ``settings``), hence the partial index.
+        Index(
+            "uq_connections_user_exchange",
+            "user_id",
+            "platform",
+            unique=True,
+            sqlite_where=text("platform != 'tg_channel'"),
+            postgresql_where=text("platform != 'tg_channel'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
@@ -194,6 +208,8 @@ class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_projects_source_ext"),
+        # Fuzzy-dedup window scans by created_at (§3.1).
+        Index("ix_projects_created_at", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -226,6 +242,13 @@ class ProjectAnalysis(Base):
     """Extraction + scoring result for a project (AGENTS.md §3.2–3.4, §5)."""
 
     __tablename__ = "project_analyses"
+    __table_args__ = (
+        # Idempotency: one analysis per (project, user) — a concurrent tick /
+        # restart replay must not create duplicates (and must not re-notify).
+        UniqueConstraint("project_id", "user_id", name="uq_analysis_project_user"),
+        # Monthly quota query pattern: user_id + computed_at >= month_start.
+        Index("ix_analyses_user_computed", "user_id", "computed_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
@@ -270,6 +293,13 @@ class Client(Base):
     """A CRM client card (AGENTS.md §3.7, §5)."""
 
     __tablename__ = "clients"
+    __table_args__ = (
+        # Idempotency: a double-tapped «Отправлено» must upsert into ONE card.
+        # NULL platform_client_id stays non-unique (manual cards).
+        UniqueConstraint(
+            "user_id", "platform_client_id", name="uq_clients_user_platform_client"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
@@ -309,6 +339,10 @@ class Reminder(Base):
     """A follow-up reminder (AGENTS.md §3.8, §5)."""
 
     __tablename__ = "reminders"
+    __table_args__ = (
+        # Due-reminder poll pattern: status == PENDING AND due_at <= now.
+        Index("ix_reminders_status_due", "status", "due_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)

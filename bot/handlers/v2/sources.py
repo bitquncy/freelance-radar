@@ -161,7 +161,12 @@ async def source_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def add_channel_from_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str
 ) -> None:
-    """Finish the TG-channel add flow started in :func:`source_add`."""
+    """Finish the TG-channel add flow started in :func:`source_add`.
+
+    The tariff limit and duplicates are re-checked HERE, at save time — the
+    button-tap check alone could be bypassed by delaying the text reply
+    (limit) or by sending the same channel twice (duplicate).
+    """
     if update.effective_user is None or update.message is None:
         return
     username = text.strip().split()[0]
@@ -174,6 +179,25 @@ async def add_channel_from_text(
     factory = get_session_factory()
     async with factory() as session:
         user, _ = await get_or_create_user(session, update.effective_user)
+        result = await session.execute(
+            select(ExchangeConnection).where(
+                ExchangeConnection.user_id == user.id,
+                ExchangeConnection.platform == Platform.TG_CHANNEL,
+            )
+        )
+        channels = list(result.scalars().all())
+        existing = {
+            str(c.settings.get("channel", "")).casefold() for c in channels
+        }
+        if username.casefold() in existing:
+            await update.message.reply_text("Этот канал уже подключён.")
+            return
+        tier = tariffs.effective_tier(user)
+        if not tariffs.can_connect_tg_channel(tier, len(channels)):
+            await update.message.reply_text(
+                "Лимит TG-каналов на вашем тарифе исчерпан — апгрейд в /subscription."
+            )
+            return
         session.add(
             ExchangeConnection(
                 user_id=user.id,

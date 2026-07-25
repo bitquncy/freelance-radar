@@ -177,8 +177,13 @@ async def portfolio_delete(
     await portfolio_command(update, context)
 
 
-def get_portfolio_handlers() -> List[BaseHandler]:
-    """Build portfolio handlers."""
+def get_portfolio_handlers(persistent: bool = False) -> List[BaseHandler]:
+    """Build portfolio handlers.
+
+    Args:
+        persistent: Persist the add-case conversation across restarts
+            (requires an application-level persistence backend).
+    """
     add_conversation = ConversationHandler(
         entry_points=[CallbackQueryHandler(portfolio_add_start, pattern=r"^v2pf:add$")],
         states={
@@ -194,6 +199,7 @@ def get_portfolio_handlers() -> List[BaseHandler]:
         },
         fallbacks=[CommandHandler("cancel", portfolio_add_cancel)],
         name="v2_portfolio_add",
+        persistent=persistent,
     )
     return [
         CommandHandler("portfolio", portfolio_command),

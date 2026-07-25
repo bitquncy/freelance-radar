@@ -214,7 +214,7 @@ class TestProposalFlow:
         """Trial (Pro-level) → AI generation with guardrails."""
         monkeypatch.setattr(
             proposals_module,
-            "get_default_llm_client",
+            "get_shared_llm_client",
             lambda: FakeLLM([GOOD_PROPOSAL]),
         )
         update = make_update(callback_data=f"v2p:gen:{project.id}")
@@ -231,7 +231,7 @@ class TestProposalFlow:
         """§6.4: no portfolio → guardrail refusal, no Proposal row."""
         monkeypatch.setattr(
             proposals_module,
-            "get_default_llm_client",
+            "get_shared_llm_client",
             lambda: FakeLLM([GOOD_PROPOSAL]),
         )
         update = make_update(callback_data=f"v2p:gen:{project.id}")

@@ -115,11 +115,24 @@ async def client_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def client_note_start(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Ask for a note text (finished by the text router)."""
+    """Ask for a note text (finished by the text router).
+
+    Ownership is verified here as well as on apply — callback data carries a
+    raw client id that a user could forge.
+    """
     query = update.callback_query
-    if query is None or query.data is None:
+    if query is None or query.data is None or update.effective_user is None:
         return
-    pending(context)["v2_note_client"] = int(query.data.split(":")[2])
+    client_id = int(query.data.split(":")[2])
+    factory = get_session_factory()
+    async with factory() as session:
+        user, _ = await get_or_create_user(session, update.effective_user)
+        client = await session.get(Client, client_id)
+        if client is None or client.user_id != user.id:
+            await query.answer("Клиент не найден.", show_alert=True)
+            return
+        await session.commit()
+    pending(context)["v2_note_client"] = client_id
     await query.answer()
     await query.message.reply_text(  # type: ignore[union-attr]
         "Пришлите текст заметки одним сообщением."

@@ -135,10 +135,13 @@ class OpenRouterClient:
 
 
 def get_default_llm_client() -> Optional[OpenRouterClient]:
-    """Build a client from config, or ``None`` when no key is configured.
+    """Build a NEW client from config, or ``None`` when no key is configured.
 
     Falls back to ``OPENAI_API_KEY``/``OPENAI_BASE_URL`` (the legacy bot's
     OpenRouter setup) when ``OPENROUTER_API_KEY`` is not set.
+
+    Production code should prefer :func:`get_shared_llm_client` — building a
+    client per call leaks an httpx connection pool per call.
     """
     from config import get_config
 
@@ -150,3 +153,29 @@ def get_default_llm_client() -> Optional[OpenRouterClient]:
     if not cfg.OPENROUTER_API_KEY and cfg.OPENAI_BASE_URL:
         base_url = cfg.OPENAI_BASE_URL
     return OpenRouterClient(api_key=api_key, base_url=base_url)
+
+
+_shared_client: Optional[OpenRouterClient] = None
+_shared_client_initialized = False
+
+
+def get_shared_llm_client() -> Optional[OpenRouterClient]:
+    """Process-wide singleton client (one connection pool per process).
+
+    Returns ``None`` when no API key is configured (no-LLM fallback mode).
+    Closed via :func:`aclose_shared_llm_client` on shutdown.
+    """
+    global _shared_client, _shared_client_initialized
+    if not _shared_client_initialized:
+        _shared_client = get_default_llm_client()
+        _shared_client_initialized = True
+    return _shared_client
+
+
+async def aclose_shared_llm_client() -> None:
+    """Close and reset the shared client (graceful shutdown / tests)."""
+    global _shared_client, _shared_client_initialized
+    if _shared_client is not None:
+        await _shared_client.close()
+    _shared_client = None
+    _shared_client_initialized = False

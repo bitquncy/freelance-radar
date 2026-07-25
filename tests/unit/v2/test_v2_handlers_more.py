@@ -70,7 +70,7 @@ class TestProposalEdges:
         await session.commit()
         monkeypatch.setattr(
             proposals_module,
-            "get_default_llm_client",
+            "get_shared_llm_client",
             lambda: FakeLLM([GOOD_PROPOSAL]),
         )
         update = make_update(callback_data=f"v2p:regen:{proposal.id}")
@@ -109,7 +109,7 @@ class TestProposalEdges:
                 raise LLMError("down")
 
         monkeypatch.setattr(
-            proposals_module, "get_default_llm_client", lambda: BoomLLM()
+            proposals_module, "get_shared_llm_client", lambda: BoomLLM()
         )
         update = make_update(callback_data=f"v2p:gen:{project.id}")
         await proposal_generate(update, make_context())
@@ -159,7 +159,7 @@ class TestProposalEdges:
     ) -> None:
         """🧩 Кейсы под заказ (§3.6) — cases without LLM intro."""
         monkeypatch.setattr(
-            proposals_module, "get_default_llm_client", lambda: None
+            proposals_module, "get_shared_llm_client", lambda: None
         )
         update = make_update(callback_data=f"v2p:cases:{project.id}")
         await proposal_cases(update, make_context())
@@ -341,7 +341,7 @@ class TestProposalGuards:
         """§3.6: adapted intro line rendered when LLM is available."""
         monkeypatch.setattr(
             proposals_module,
-            "get_default_llm_client",
+            "get_shared_llm_client",
             lambda: FakeLLM(["Делал похожего бота записи для барбершопа."]),
         )
         update = make_update(callback_data=f"v2p:cases:{project.id}")
@@ -504,7 +504,7 @@ class TestProposalNotFoundAndGuards:
         session.add(proposal)
         await session.commit()
         monkeypatch.setattr(
-            proposals_module, "get_default_llm_client", lambda: BoomLLM()
+            proposals_module, "get_shared_llm_client", lambda: BoomLLM()
         )
         update = make_update(callback_data=f"v2p:regen:{proposal.id}")
         await proposal_regenerate(update, make_context())
@@ -525,7 +525,7 @@ class TestProposalNotFoundAndGuards:
                 raise LLMError("down")
 
         monkeypatch.setattr(
-            proposals_module, "get_default_llm_client", lambda: BoomLLM()
+            proposals_module, "get_shared_llm_client", lambda: BoomLLM()
         )
         update = make_update(callback_data=f"v2p:cases:{project.id}")
         await proposal_cases(update, make_context())
