@@ -1,5 +1,6 @@
 """Database initialization for FreelanceRadar bot."""
 import asyncio
+import os
 import aiosqlite
 from pathlib import Path
 import sys
@@ -7,8 +8,17 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dotenv import load_dotenv
+
 from services.logger_config import get_logger
-from config import DB_PATH
+
+# DB_PATH is read from the environment (with the same default as config.py)
+# instead of importing `config`: importing config validates the FULL settings
+# model and crashes without BOT_TOKEN/OWNER_CHAT_ID. This script runs inside
+# the container entrypoint — including CI's secret-less image smoke test —
+# where only DB_PATH matters. load_dotenv() keeps the local `.env` workflow.
+load_dotenv()
+DB_PATH = os.environ.get("DB_PATH", "freelance_radar.db")
 
 logger = get_logger(__name__)
 
