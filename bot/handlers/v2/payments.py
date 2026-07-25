@@ -1,0 +1,182 @@
+"""Telegram Payments flow (ЮKassa provider) — AGENTS.md §7, §14 Фаза 2.
+
+«Оплата не покидая Telegram — ниже трение подписки» (§4.2). Flow:
+buy button → ``send_invoice`` → ``PreCheckoutQuery`` (validated) →
+``successful_payment`` → idempotent activation via :mod:`core.billing`.
+
+Without ``PAYMENT_PROVIDER_TOKEN`` the buttons stay visible but answer with
+a friendly "скоро" alert and the manual /grant flow remains the only path —
+so the feature ships dark until the owner connects ЮKassa in BotFather.
+"""
+from typing import List
+
+from telegram import LabeledPrice, Update
+from telegram.ext import (
+    BaseHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    PreCheckoutQueryHandler,
+    filters,
+)
+
+from bot.handlers.v2.common import TIER_TITLES, get_or_create_user
+from core import billing
+from core.db import get_session_factory
+from core.models import SubscriptionTier
+from services.logger_config import get_logger
+
+logger = get_logger(__name__)
+
+TIER_DESCRIPTIONS = {
+    SubscriptionTier.BASIC: (
+        "1 биржа + до 5 TG-каналов, 50 анализов/мес, отклик по шаблону, "
+        "CRM до 15 клиентов"
+    ),
+    SubscriptionTier.PRO: (
+        "До 3 бирж + безлимит каналов и анализов, AI-отклики с адаптацией "
+        "портфолио, напоминания, недельный отчёт"
+    ),
+    SubscriptionTier.BUSINESS: (
+        "Безлимит источников, варианты тона, команда до 3 мест, экспорт, "
+        "приоритетное сканирование"
+    ),
+}
+
+
+def _provider_token() -> str:
+    from config import get_config
+
+    return get_config().PAYMENT_PROVIDER_TOKEN
+
+
+async def buy_subscription(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle «💳 Оплатить <tier>» — send a Telegram invoice."""
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return
+    token = _provider_token()
+    if not token:
+        await query.answer(
+            "Оплата картой подключается — пока напишите владельцу, "
+            "тариф выдаётся вручную.",
+            show_alert=True,
+        )
+        return
+    try:
+        tier = SubscriptionTier(query.data.split(":")[2])
+        intent = billing.parse_payload(billing.build_payload(tier))
+    except (ValueError, billing.PaymentError):
+        await query.answer("Неизвестный тариф.", show_alert=True)
+        return
+    await query.answer()
+    from config import get_config
+
+    await context.bot.send_invoice(
+        chat_id=update.effective_user.id,
+        title=f"FreelanceRadar {TIER_TITLES[tier]} — {intent.days} дней",
+        description=TIER_DESCRIPTIONS[tier],
+        payload=billing.build_payload(tier),
+        provider_token=token,
+        currency=get_config().PAYMENT_CURRENCY,
+        prices=[
+            LabeledPrice(
+                label=f"{TIER_TITLES[tier]} · {intent.days} дней",
+                amount=intent.amount_kopecks,
+            )
+        ],
+    )
+    logger.info(
+        "billing.invoice_sent",
+        telegram_id=update.effective_user.id,
+        tier=tier.value,
+    )
+
+
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer Telegram's final pre-charge confirmation (§ payments contract).
+
+    Telegram gives 10 seconds to confirm; we re-validate the payload and the
+    amount against the §7 price table before approving the charge.
+    """
+    pcq = update.pre_checkout_query
+    if pcq is None:
+        return
+    try:
+        intent = billing.parse_payload(pcq.invoice_payload)
+        billing.validate_paid_amount(intent, pcq.total_amount)
+    except billing.PaymentError as exc:
+        logger.warning("billing.precheckout_rejected", error=str(exc))
+        await pcq.answer(
+            ok=False,
+            error_message=(
+                "Не удалось проверить заказ — попробуйте открыть оплату заново."
+            ),
+        )
+        return
+    await pcq.answer(ok=True)
+
+
+async def on_successful_payment(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Activate the subscription after Telegram confirms the charge."""
+    message = update.message
+    if (
+        message is None
+        or message.successful_payment is None
+        or update.effective_user is None
+    ):
+        return
+    payment = message.successful_payment
+    try:
+        intent = billing.parse_payload(payment.invoice_payload)
+        billing.validate_paid_amount(intent, payment.total_amount)
+    except billing.PaymentError as exc:
+        # Money was charged but the payload is foreign/borked — never
+        # activate silently; log loudly for manual reconciliation.
+        logger.error(
+            "billing.successful_payment_invalid",
+            error=str(exc),
+            charge_id=payment.telegram_payment_charge_id,
+            telegram_id=update.effective_user.id,
+        )
+        await message.reply_text(
+            "Платёж получен, но заказ не распознан — напишите владельцу, "
+            "подписку активируют вручную."
+        )
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        user, _ = await get_or_create_user(session, update.effective_user)
+        subscription, applied = await billing.apply_paid_subscription(
+            session,
+            user,
+            intent,
+            charge_id=payment.telegram_payment_charge_id,
+        )
+        await session.commit()
+        expires = user.subscription_expires_at
+
+    if not applied:
+        await message.reply_text("Этот платёж уже был учтён — всё в порядке.")
+        return
+    await message.reply_text(
+        f"Оплата прошла ✅ Тариф {TIER_TITLES[intent.tier]} активен"
+        + (f" до {expires:%d.%m.%Y}." if expires else ".")
+        + " Спасибо, что поддерживаете радар!"
+    )
+
+
+def get_payment_handlers() -> List[BaseHandler]:
+    """Build payment handlers."""
+    return [
+        CallbackQueryHandler(
+            buy_subscription, pattern=r"^v2sub:buy:(basic|pro|business)$"
+        ),
+        PreCheckoutQueryHandler(precheckout),
+        MessageHandler(filters.SUCCESSFUL_PAYMENT, on_successful_payment),
+    ]

@@ -87,11 +87,17 @@ class Config(BaseSettings):
         default=None, description="Telethon session name (never committed)"
     )
     YOOKASSA_SHOP_ID: Optional[str] = Field(
-        default=None, description="ЮKassa shop id (payments, Phase 2)"
+        default=None, description="ЮKassa shop id (site checkout, reserved)"
     )
     YOOKASSA_SECRET_KEY: Optional[str] = Field(
-        default=None, description="ЮKassa secret key (payments, Phase 2)"
+        default=None, description="ЮKassa secret key (site checkout, reserved)"
     )
+    # Telegram Payments provider token (BotFather → Payments → ЮKassa).
+    # Empty = payments disabled, manual /grant invoicing remains (MVP §14).
+    PAYMENT_PROVIDER_TOKEN: str = Field(
+        default="", description="Telegram Payments provider token (ЮKassa)"
+    )
+    PAYMENT_CURRENCY: str = Field(default="RUB", description="Invoice currency")
 
     @field_validator("KWORK_REQUEST_DELAY_MAX")
     @classmethod

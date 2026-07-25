@@ -376,6 +376,11 @@ class Subscription(Base):
     """A subscription payment record (AGENTS.md §5, §7)."""
 
     __tablename__ = "subscriptions"
+    __table_args__ = (
+        # Telegram Payments charge id — unique so a re-delivered
+        # successful_payment update can never activate a subscription twice.
+        UniqueConstraint("payment_charge_id", name="uq_subscriptions_charge"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
@@ -385,6 +390,7 @@ class Subscription(Base):
     status: Mapped[PaymentStatus] = mapped_column(
         _enum_col(PaymentStatus), default=PaymentStatus.PENDING
     )
+    payment_charge_id: Mapped[Optional[str]] = mapped_column(String(255))
     period_start: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     period_end: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -505,10 +505,19 @@ class TestSchedulerResilience:
 
         scheduler = FakeScheduler()
         register_v2_jobs(scheduler, application=None)  # type: ignore[arg-type]
-        for job in scheduler.jobs:
+        interval_jobs = [
+            j
+            for j in scheduler.jobs
+            if j["id"] in ("v2_radar_tick", "v2_reminders_tick")
+        ]
+        assert len(interval_jobs) == 2
+        for job in interval_jobs:
             assert job["misfire_grace_time"] == JOB_MISFIRE_GRACE_SECONDS
             assert job["coalesce"] is True
             assert job["max_instances"] == 1
+        # every registered job must tolerate lateness one way or another
+        for job in scheduler.jobs:
+            assert job["misfire_grace_time"] >= JOB_MISFIRE_GRACE_SECONDS
 
 
 class TestStartupSequence:
