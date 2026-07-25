@@ -1,0 +1,81 @@
+"""Async database engine/session management for V2 models.
+
+Uses ``DATABASE_URL`` from config. Defaults to a local SQLite file for
+development; production should point at PostgreSQL (AGENTS.md §4.2).
+Schema is managed by Alembic (``alembic upgrade head``); for SQLite dev
+convenience :func:`init_v2_db` creates tables directly.
+"""
+from typing import Optional
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from core.models import Base
+
+_engine: Optional[AsyncEngine] = None
+_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+
+
+def normalize_database_url(url: str) -> str:
+    """Normalize a DATABASE_URL to an async SQLAlchemy driver URL.
+
+    Args:
+        url: Raw URL (e.g. ``postgres://...`` from a hosting provider).
+
+    Returns:
+        URL with an async driver (``asyncpg`` / ``aiosqlite``).
+    """
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("sqlite:///") and "+aiosqlite" not in url:
+        return url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    return url
+
+
+def get_engine() -> AsyncEngine:
+    """Get or lazily create the global async engine from config."""
+    global _engine
+    if _engine is None:
+        from config import get_config
+
+        url = normalize_database_url(get_config().DATABASE_URL)
+        _engine = create_async_engine(url, pool_pre_ping=True)
+    return _engine
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Get or lazily create the global async session factory."""
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    return _session_factory
+
+
+def set_session_factory(
+    factory: Optional[async_sessionmaker[AsyncSession]],
+) -> None:
+    """Override the global session factory (used by tests)."""
+    global _session_factory
+    _session_factory = factory
+
+
+async def init_v2_db(engine: Optional[AsyncEngine] = None) -> None:
+    """Create all V2 tables (dev/SQLite path; prod uses Alembic)."""
+    eng = engine or get_engine()
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def dispose_engine() -> None:
+    """Dispose the global engine (graceful shutdown)."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
