@@ -79,3 +79,10 @@ logs/
 *.db-journal
 *.db-shm
 *.db-wal
+
+# Archives must never be committed (AGENTS.md §8: leak incident)
+*.zip
+
+# V2 database files
+freelance_radar_v2.db
+freelance_radar_v2.db-*

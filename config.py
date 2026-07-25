@@ -51,6 +51,48 @@ class Config(BaseSettings):
         description="User-Agent header",
     )
 
+    # --- FreelanceRadar V2 (AGENTS.md) ---
+    RADAR_V2_ENABLED: bool = Field(
+        default=False,
+        description="Enable the V2 multi-tenant layer (AGENTS.md spec)",
+    )
+    DATABASE_URL: str = Field(
+        default="sqlite+aiosqlite:///freelance_radar_v2.db",
+        description="V2 database URL (PostgreSQL in production, AGENTS.md §4.2)",
+    )
+    REDIS_URL: Optional[str] = Field(
+        default=None, description="Redis URL (dedup cache/queue, optional)"
+    )
+    OPENROUTER_API_KEY: str = Field(
+        default="", description="OpenRouter API key (falls back to OPENAI_API_KEY)"
+    )
+    OPENROUTER_BASE_URL: str = Field(
+        default="https://openrouter.ai/api/v1", description="OpenRouter base URL"
+    )
+    EXTRACTION_MODEL: str = Field(
+        default="openai/gpt-4o-mini",
+        description="Cheap model for per-listing extraction (AGENTS.md §6.1)",
+    )
+    GENERATION_MODEL: str = Field(
+        default="anthropic/claude-3.5-sonnet",
+        description="Strong model for proposal generation (AGENTS.md §6.1)",
+    )
+    TELETHON_API_ID: Optional[int] = Field(
+        default=None, description="Telethon API id (dedicated account, §8)"
+    )
+    TELETHON_API_HASH: Optional[str] = Field(
+        default=None, description="Telethon API hash"
+    )
+    TELETHON_SESSION_NAME: Optional[str] = Field(
+        default=None, description="Telethon session name (never committed)"
+    )
+    YOOKASSA_SHOP_ID: Optional[str] = Field(
+        default=None, description="ЮKassa shop id (payments, Phase 2)"
+    )
+    YOOKASSA_SECRET_KEY: Optional[str] = Field(
+        default=None, description="ЮKassa secret key (payments, Phase 2)"
+    )
+
     @field_validator("KWORK_REQUEST_DELAY_MAX")
     @classmethod
     def delay_max_greater_than_min(cls, v: float, info) -> float:

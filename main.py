@@ -152,7 +152,41 @@ def main() -> None:
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_and_migrate())
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    from config import get_config
+    v2_enabled = get_config().RADAR_V2_ENABLED
+    if v2_enabled:
+        # Alembic (not create_all): records alembic_version so future
+        # schema migrations apply cleanly on SQLite and PostgreSQL alike.
+        from core.db import run_v2_migrations
+        run_v2_migrations()
+        logger.info("v2.db_migrated")
+
+    builder = Application.builder().token(BOT_TOKEN)
+    if v2_enabled:
+        # Survive container restarts mid-conversation (onboarding, portfolio
+        # add, pending edit/note inputs live in user_data).
+        from pathlib import Path as _Path
+
+        import os as _os
+        from telegram.ext import PicklePersistence
+
+        state_dir = _Path(_os.environ.get("PTB_STATE_DIR", "data"))
+        state_dir.mkdir(parents=True, exist_ok=True)
+        builder = builder.persistence(
+            PicklePersistence(filepath=str(state_dir / "ptb_state.pickle"))
+        )
+
+        async def _v2_post_shutdown(app: Application) -> None:
+            """Release V2 resources (PTB restores its own signal handling)."""
+            from core.db import dispose_engine
+            from core.llm import aclose_shared_llm_client
+
+            await aclose_shared_llm_client()
+            await dispose_engine()
+            logger.info("v2.resources_released")
+
+        builder = builder.post_shutdown(_v2_post_shutdown)
+    application = builder.build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -186,6 +220,11 @@ def main() -> None:
     for handler in get_jobs_handlers():
         application.add_handler(handler)
 
+    if v2_enabled:
+        from bot.handlers.v2 import register_v2_handlers
+        register_v2_handlers(application)
+        logger.info("v2.handlers_registered")
+
     application.add_error_handler(_telegram_error_handler)
 
     scheduler = AsyncIOScheduler()
@@ -209,6 +248,9 @@ def main() -> None:
         hours=1,
         id="cleanup_blacklist",
     )
+    if v2_enabled:
+        from monitoring.worker import register_v2_jobs
+        register_v2_jobs(scheduler, application)
     scheduler.start()
 
     logger.info("bot.started", interval_minutes=MONITOR_INTERVAL_MINUTES)

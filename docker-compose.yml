@@ -13,6 +13,11 @@ services:
       - ./freelance_radar_session.session:/app/freelance_radar_session.session
     environment:
       - DB_PATH=freelance_radar.db
+      # V2 database lives in the mounted ./data volume so users/subscriptions
+      # /CRM survive container re-creation. For production load switch to
+      # PostgreSQL (see the commented service below) per AGENTS.md §4.2.
+      - DATABASE_URL=sqlite+aiosqlite:///data/freelance_radar_v2.db
+      - PTB_STATE_DIR=data
     logging:
       driver: "json-file"
       options:
@@ -36,3 +41,26 @@ services:
     labels:
       - "com.freelanceradar.version=1.0"
       - "com.freelanceradar.description=FreelanceRadar Telegram Bot"
+
+# Production V2 path (AGENTS.md §4.2): PostgreSQL instead of SQLite.
+# Uncomment, set DATABASE_URL above to
+#   postgresql+asyncpg://radar:${POSTGRES_PASSWORD}@postgres:5432/freelanceradar
+# and add `depends_on: [postgres]` to the bot service.
+#
+#  postgres:
+#    image: postgres:16-alpine
+#    restart: unless-stopped
+#    environment:
+#      - POSTGRES_USER=radar
+#      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+#      - POSTGRES_DB=freelanceradar
+#    volumes:
+#      - pgdata:/var/lib/postgresql/data
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U radar -d freelanceradar"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
+#
+#volumes:
+#  pgdata:
