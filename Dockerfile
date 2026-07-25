@@ -1,4 +1,9 @@
-FROM python:3.11-slim
+# Pinned to bookworm (Debian 12): Playwright 1.41's dependency registry
+# supports debian11/debian12/ubuntu20.04/ubuntu22.04 only. The floating
+# python:3.11-slim tag moved to Debian 13 (trixie), where
+# `playwright install-deps` falls back to the ubuntu20.04 package list and
+# dies on renamed font packages (ttf-unifont → fonts-unifont).
+FROM python:3.11-slim-bookworm
 
 # Install system dependencies for Playwright
 RUN apt-get update && apt-get install -y \
