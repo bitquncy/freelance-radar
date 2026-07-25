@@ -152,6 +152,13 @@ def main() -> None:
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_and_migrate())
 
+    from config import get_config
+    v2_enabled = get_config().RADAR_V2_ENABLED
+    if v2_enabled:
+        from core.db import init_v2_db
+        loop.run_until_complete(init_v2_db())
+        logger.info("v2.db_initialized")
+
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -186,6 +193,11 @@ def main() -> None:
     for handler in get_jobs_handlers():
         application.add_handler(handler)
 
+    if v2_enabled:
+        from bot.handlers.v2 import register_v2_handlers
+        register_v2_handlers(application)
+        logger.info("v2.handlers_registered")
+
     application.add_error_handler(_telegram_error_handler)
 
     scheduler = AsyncIOScheduler()
@@ -209,6 +221,9 @@ def main() -> None:
         hours=1,
         id="cleanup_blacklist",
     )
+    if v2_enabled:
+        from monitoring.worker import register_v2_jobs
+        register_v2_jobs(scheduler, application)
     scheduler.start()
 
     logger.info("bot.started", interval_minutes=MONITOR_INTERVAL_MINUTES)
