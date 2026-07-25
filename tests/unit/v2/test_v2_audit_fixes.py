@@ -506,3 +506,136 @@ class TestSchedulerResilience:
             assert job["misfire_grace_time"] == JOB_MISFIRE_GRACE_SECONDS
             assert job["coalesce"] is True
             assert job["max_instances"] == 1
+
+
+class TestStartupSequence:
+    def test_migrations_preserve_event_loop(self, tmp_path, monkeypatch) -> None:
+        """REVIEW #1: alembic's asyncio.run must not kill the caller's loop.
+
+        Reproduces the production startup sequence: create loop →
+        run_v2_migrations() → APScheduler start on the current loop. Before
+        the fix this crashed with "There is no current event loop".
+        """
+        import asyncio
+
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        from config import get_config
+        from core.db import run_v2_migrations
+
+        monkeypatch.setattr(
+            get_config(),
+            "DATABASE_URL",
+            f"sqlite+aiosqlite:///{tmp_path}/startup.db",
+        )
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            run_v2_migrations()
+            # The caller's loop must still be the current one...
+            assert asyncio.get_event_loop() is loop
+            # ...and the scheduler must be able to bind to it (main.py:254).
+            scheduler = AsyncIOScheduler()
+            scheduler.start(paused=True)
+            scheduler.shutdown(wait=False)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    def test_migrated_db_has_full_schema(self, tmp_path, monkeypatch) -> None:
+        """The startup migration path produces the complete V2 schema."""
+        from config import get_config
+        from core.db import run_v2_migrations
+
+        db_path = tmp_path / "schema.db"
+        monkeypatch.setattr(
+            get_config(), "DATABASE_URL", f"sqlite+aiosqlite:///{db_path}"
+        )
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        run_v2_migrations()
+        conn = sqlite3.connect(db_path)
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        conn.close()
+        assert "alembic_version" in tables  # future upgrades apply cleanly
+        assert {"users", "projects", "project_analyses", "clients"} <= tables
+
+
+class TestAtomicClaimMechanism:
+    async def test_second_claim_matches_zero_rows(
+        self, session_factory, session: AsyncSession, user, project
+    ) -> None:
+        """REVIEW #4: pin the DB-level claim, not just the handler guard.
+
+        Two racing sessions both attempt DRAFT→SENT; the UPDATE ... WHERE
+        status != 'sent' must award exactly one winner (rowcount 1 then 0).
+        """
+        from sqlalchemy import update as sa_update
+
+        proposal = Proposal(
+            project_id=project.id, user_id=user.id, generated_text="т"
+        )
+        session.add(proposal)
+        await session.commit()
+        proposal_id = proposal.id
+
+        def _claim():
+            return (
+                sa_update(Proposal)
+                .where(
+                    Proposal.id == proposal_id,
+                    Proposal.status != ProposalStatus.SENT,
+                )
+                .values(status=ProposalStatus.SENT, sent_at=utcnow())
+                .execution_options(synchronize_session=False)
+            )
+
+        async with session_factory() as first:
+            winner = await first.execute(_claim())
+            await first.commit()
+        async with session_factory() as second:
+            loser = await second.execute(_claim())
+            await second.commit()
+        assert winner.rowcount == 1
+        assert loser.rowcount == 0
+
+
+class TestSourceAddRace:
+    async def test_integrity_error_answered_not_raised(
+        self, session_factory, session, user, monkeypatch
+    ) -> None:
+        """REVIEW #3: the double-tap loser gets an alert, not a traceback.
+
+        Simulates the true race window: the handler's duplicate check runs
+        BEFORE the winner's commit becomes visible, so the loser reaches the
+        INSERT and only the partial unique index can stop it — the handler
+        must answer politely instead of leaking IntegrityError.
+        """
+        from bot.handlers.v2 import sources as sources_module
+        from bot.handlers.v2.sources import source_add
+
+        # The winner's row is already committed...
+        session.add(ExchangeConnection(user_id=user.id, platform=Platform.KWORK))
+        await session.commit()
+
+        # ...but the loser's connection listing ran before that commit.
+        async def _sees_nothing(s: object, user_id: int) -> list:
+            return []
+
+        monkeypatch.setattr(sources_module, "_load_connections", _sees_nothing)
+        update = make_update(callback_data="v2s:add:kwork")
+        await source_add(update, make_context())  # must not raise
+
+        answer_args = update.callback_query.answer.await_args
+        assert "уже подключён" in answer_args.args[0]
+        assert answer_args.kwargs.get("show_alert") is True
+        async with session_factory() as check:
+            rows = (
+                (await check.execute(select(ExchangeConnection))).scalars().all()
+            )
+        assert len(rows) == 1  # no duplicate row was created

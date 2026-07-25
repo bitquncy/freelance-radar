@@ -2,6 +2,8 @@
 from typing import List
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import BaseHandler, CallbackQueryHandler, ContextTypes
 
@@ -72,6 +74,16 @@ async def sources_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def _load_connections(
+    session: "AsyncSession", user_id: int
+) -> List[ExchangeConnection]:
+    """List a user's connections (seam for race-simulation in tests)."""
+    result = await session.execute(
+        select(ExchangeConnection).where(ExchangeConnection.user_id == user_id)
+    )
+    return list(result.scalars().all())
+
+
 async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add a connection, enforcing §7 limits."""
     query = update.callback_query
@@ -82,10 +94,7 @@ async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     async with factory() as session:
         user, _ = await get_or_create_user(session, update.effective_user)
         tier = tariffs.effective_tier(user)
-        result = await session.execute(
-            select(ExchangeConnection).where(ExchangeConnection.user_id == user.id)
-        )
-        connections = list(result.scalars().all())
+        connections = await _load_connections(session, user.id)
         exchanges = sum(
             1 for c in connections if c.platform is not Platform.TG_CHANNEL
         )
@@ -114,7 +123,18 @@ async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 show_alert=True,
             )
             return
-        session.add(ExchangeConnection(user_id=user.id, platform=platform))
+        # Savepoint: a double-tap races on the partial unique index
+        # (user_id, platform) — the loser gets a friendly answer, not a
+        # traceback (same pattern as collector/CRM/user creation).
+        try:
+            async with session.begin_nested():
+                session.add(
+                    ExchangeConnection(user_id=user.id, platform=platform)
+                )
+                await session.flush()
+        except IntegrityError:
+            await query.answer("Этот источник уже подключён.", show_alert=True)
+            return
         await session.commit()
     await query.answer(f"{PLATFORM_TITLES[platform]} подключён.")
     await sources_menu(update, context)

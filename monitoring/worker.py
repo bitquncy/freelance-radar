@@ -358,6 +358,9 @@ async def run_radar_tick(
     stats = TickStats()
 
     # Phase 0: read connections + users (short read-only session).
+    # Known staleness window: user rows are read once per tick — a tariff
+    # upgrade committed mid-tick becomes visible on the NEXT tick. Time-based
+    # expiry is unaffected (effective_tier re-evaluates the clock per call).
     async with factory() as session:
         connections = list(await _load_active_connections(session))
         if not connections:

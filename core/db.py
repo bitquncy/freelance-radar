@@ -82,16 +82,34 @@ def run_v2_migrations() -> None:
     Runs synchronously BEFORE the bot's event loop starts (alembic's async
     env calls ``asyncio.run`` internally). Works for SQLite and PostgreSQL
     alike, and records ``alembic_version`` so future upgrades apply cleanly.
+
+    Event-loop safety: ``asyncio.run`` inside alembic's env sets the current
+    event loop to ``None`` on exit. The caller's loop is captured and
+    restored here, otherwise everything after this call that relies on the
+    current loop (APScheduler ``start()``, PTB polling) crashes with
+    "There is no current event loop".
     """
+    import asyncio
     from pathlib import Path
 
     from alembic import command
     from alembic.config import Config as AlembicConfig
 
+    try:
+        previous_loop: Optional[asyncio.AbstractEventLoop] = (
+            asyncio.get_event_loop()
+        )
+    except RuntimeError:
+        previous_loop = None
+
     root = Path(__file__).resolve().parent.parent
     config = AlembicConfig(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "alembic"))
-    command.upgrade(config, "head")
+    try:
+        command.upgrade(config, "head")
+    finally:
+        if previous_loop is not None:
+            asyncio.set_event_loop(previous_loop)
 
 
 async def dispose_engine() -> None:

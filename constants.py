@@ -5,10 +5,12 @@ from enum import Enum
 class _StrEnum(str, Enum):
     """Base class for string enums (compatible with Python 3.10+).
 
-    Defines ``__str__`` explicitly: on Python 3.11 ``str(str-Enum)`` returns
-    ``"ClassName.MEMBER"`` (inherited from ``Enum``), which leaked into
-    user-visible filter reasons like ``"FilterReason.BUDGET_TOO_LOW (...)"``.
-    This mirrors ``enum.StrEnum`` semantics: ``str(x) == x.value``.
+    Defines ``__str__`` explicitly: on Python 3.11 ``str()``, f-strings,
+    ``%s`` and ``format()`` of a ``(str, Enum)`` all render
+    ``"ClassName.MEMBER"`` (via ``Enum.__str__``/``__format__``), which
+    leaked into user-visible filter reasons like
+    ``"FilterReason.BUDGET_TOO_LOW (...)"``. This mirrors ``enum.StrEnum``
+    semantics: every string coercion yields ``x.value``.
     """
 
     def __str__(self) -> str:
