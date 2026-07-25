@@ -452,13 +452,16 @@ class TestLegacyBugFixes:
 
 
 class TestHealthcheckScript:
-    def _run(self, db_path: str) -> subprocess.CompletedProcess:
+    def _run(self, db_path: str, cwd: Path) -> subprocess.CompletedProcess:
+        # Run from an isolated cwd (not the repo root): check_log() resolves
+        # ``logs/freelance_radar.log`` relative to the working directory, so a
+        # stray log file in the repo must not influence this test.
         return subprocess.run(
             [sys.executable, str(REPO_ROOT / "scripts" / "healthcheck.py")],
             env={**os.environ, "DB_PATH": db_path},
             capture_output=True,
             text=True,
-            cwd=REPO_ROOT,
+            cwd=str(cwd),
             timeout=30,
         )
 
@@ -466,12 +469,12 @@ class TestHealthcheckScript:
         """AUDIT H-1: the check must actually pass on a healthy database."""
         db = tmp_path / "ok.db"
         sqlite3.connect(db).close()
-        result = self._run(str(db))
+        result = self._run(str(db), cwd=tmp_path)
         assert result.returncode == 0, result.stdout + result.stderr
 
     def test_unreachable_db_exits_nonzero(self, tmp_path: Path) -> None:
         """...and fail cleanly (no traceback exit) when the DB is unreachable."""
-        result = self._run(str(tmp_path / "no_such_dir" / "x.db"))
+        result = self._run(str(tmp_path / "no_such_dir" / "x.db"), cwd=tmp_path)
         assert result.returncode == 1, result.stdout + result.stderr
 
 

@@ -92,7 +92,7 @@ def run_v2_migrations() -> None:
     import asyncio
     from pathlib import Path
 
-    from alembic import command
+    from alembic import command  # type: ignore[attr-defined]
     from alembic.config import Config as AlembicConfig
 
     try:
