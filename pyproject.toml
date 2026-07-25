@@ -71,6 +71,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+# CI runs the bare `pytest` binary, which (unlike `python -m pytest`) does NOT
+# put the repo root on sys.path — first-party imports (services/, core/, ...)
+# then fail during collection with exit code 2. Anchor the root explicitly.
+pythonpath = ["."]
 # Lock pytest-asyncio 1.x loop scope (silences its unset-default warning and
 # keeps per-test loop isolation, matching the pre-1.x behavior).
 asyncio_default_fixture_loop_scope = "function"
