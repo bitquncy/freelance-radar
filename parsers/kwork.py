@@ -136,6 +136,45 @@ class KworkParser(BaseParser):
             delay_min=float(KWORK_REQUEST_DELAY_MIN),
             delay_max=float(KWORK_REQUEST_DELAY_MAX),
         )
+        # Persistent browser instance for reuse across fetch cycles
+        self._playwright = None
+        self._browser = None
+        self._browser_lock = asyncio.Lock()
+
+    async def _get_browser(self):
+        """Get or create persistent browser instance."""
+        async with self._browser_lock:
+            if self._browser is None or not self._browser.is_connected():
+                if self._playwright is None:
+                    self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                    ],
+                )
+                logger.info("kwork.browser_created")
+            return self._browser
+
+    async def cleanup(self):
+        """Cleanup persistent browser resources."""
+        async with self._browser_lock:
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except (PlaywrightError, OSError):
+                    pass
+                self._browser = None
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except (PlaywrightError, OSError):
+                    pass
+                self._playwright = None
+            logger.info("kwork.browser_cleaned")
 
     # -----------------------------------------------------------------------
     # Stealth helpers
@@ -226,89 +265,81 @@ class KworkParser(BaseParser):
             )
             return []
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+        browser = await self._get_browser()
+        context = await browser.new_context(**self._get_browser_context_args())
+        try:
+            await context.add_cookies([{
+                "name": "visited",
+                "value": "1",
+                "domain": ".kwork.ru",
+                "path": "/",
+            }])
+
+            cards = await self._fetch_project_cards(context)
+            logger.info("kwork.project_cards_found", count=len(cards))
+
+            if not cards:
+                logger.warning("kwork.no_cards_found")
+                return []
+
+            cards = cards[:limit]
+            detail_count = min(len(cards), self.max_detail_pages)
+            logger.info(
+                "kwork.detail_pages_planned",
+                detail_count=detail_count,
+                total_cards=len(cards),
             )
-            try:
-                context = await browser.new_context(**self._get_browser_context_args())
-                await context.add_cookies([{
-                    "name": "visited",
-                    "value": "1",
-                    "domain": ".kwork.ru",
-                    "path": "/",
-                }])
 
-                cards = await self._fetch_project_cards(context)
-                logger.info("kwork.project_cards_found", count=len(cards))
-
-                if not cards:
-                    logger.warning("kwork.no_cards_found")
-                    return []
-
-                cards = cards[:limit]
-                detail_count = min(len(cards), self.max_detail_pages)
-                logger.info(
-                    "kwork.detail_pages_planned",
-                    detail_count=detail_count,
-                    total_cards=len(cards),
-                )
-
-                vacancies: List[JobVacancy] = []
-                for idx, card in enumerate(cards):
-                    try:
-                        url = card.get("url")
-                        if not url:
-                            continue
-
-                        if idx < detail_count:
-                            vacancy = await self._fetch_detail_from_context(
-                                context, url, basic_info=card,
-                            )
-                        else:
-                            vacancy = self._build_vacancy_from_card(card)
-
-                        if vacancy:
-                            vacancies.append(vacancy)
-                            logger.info(
-                                "kwork.vacancy_fetched",
-                                kwork_id=vacancy.kwork_id,
-                                title=vacancy.title[:60],
-                                budget=vacancy.budget,
-                                has_detail=(idx < detail_count),
-                            )
-
-                        await self.rate_limiter.sleep()
-                    except (PlaywrightError, ValueError, TypeError, KeyError, AttributeError) as e:
-                        logger.error("kwork.fetch_detail_error", url=card.get("url"), error=str(e))
+            vacancies: List[JobVacancy] = []
+            for idx, card in enumerate(cards):
+                try:
+                    url = card.get("url")
+                    if not url:
                         continue
 
-                logger.info("kwork.fetch_completed", total_found=len(vacancies))
-                return vacancies
+                    if idx < detail_count:
+                        vacancy = await self._fetch_detail_from_context(
+                            context, url, basic_info=card,
+                        )
+                    else:
+                        vacancy = self._build_vacancy_from_card(card)
 
-            finally:
-                await browser.close()
+                    if vacancy:
+                        vacancies.append(vacancy)
+                        logger.info(
+                            "kwork.vacancy_fetched",
+                            kwork_id=vacancy.kwork_id,
+                            title=vacancy.title[:60],
+                            budget=vacancy.budget,
+                            has_detail=(idx < detail_count),
+                        )
+
+                    await self.rate_limiter.sleep()
+                except (PlaywrightError, ValueError, TypeError, KeyError, AttributeError) as e:
+                    logger.error("kwork.fetch_detail_error", url=card.get("url"), error=str(e))
+                    continue
+
+            logger.info("kwork.fetch_completed", total_found=len(vacancies))
+            return vacancies
+
+        finally:
+            await context.close()
 
     async def fetch_project_list(self) -> List[str]:
         """Fetch list of project URLs (backward compatibility)."""
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
-            try:
-                context = await browser.new_context(**self._get_browser_context_args())
-                await context.add_cookies([{
-                    "name": "visited",
-                    "value": "1",
-                    "domain": ".kwork.ru",
-                    "path": "/",
-                }])
-                cards = await self._fetch_project_cards(context)
-                return [c["url"] for c in cards if c.get("url")]
-            finally:
-                await browser.close()
+        browser = await self._get_browser()
+        context = await browser.new_context(**self._get_browser_context_args())
+        try:
+            await context.add_cookies([{
+                "name": "visited",
+                "value": "1",
+                "domain": ".kwork.ru",
+                "path": "/",
+            }])
+            cards = await self._fetch_project_cards(context)
+            return [c["url"] for c in cards if c.get("url")]
+        finally:
+            await context.close()
 
     @retry(
         stop=stop_after_attempt(3),
@@ -321,22 +352,18 @@ class KworkParser(BaseParser):
         if not self.rate_limiter.can_make_request():
             return None
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
-            try:
-                context = await browser.new_context(**self._get_browser_context_args())
-                await context.add_cookies([{
-                    "name": "visited",
-                    "value": "1",
-                    "domain": ".kwork.ru",
-                    "path": "/",
-                }])
-                return await self._fetch_detail_from_context(context, url, basic_info)
-            finally:
-                await browser.close()
+        browser = await self._get_browser()
+        context = await browser.new_context(**self._get_browser_context_args())
+        try:
+            await context.add_cookies([{
+                "name": "visited",
+                "value": "1",
+                "domain": ".kwork.ru",
+                "path": "/",
+            }])
+            return await self._fetch_detail_from_context(context, url, basic_info)
+        finally:
+            await context.close()
 
     # -----------------------------------------------------------------------
     # Internal: list page parsing (uses shared context)

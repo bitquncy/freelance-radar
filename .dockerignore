@@ -1,0 +1,65 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+*.whl
+*.egg-info
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local development
+.env
+.env.*
+!.env.example
+*.db
+*.session
+debug/
+logs/
+data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Documentation
+*.md
+CHANGELOG*
+FIXED*
+IMPROVEMENTS*
+SUMMARY*
+README.md
+
+# Config templates (not needed at runtime)
+nixpacks.toml
+railway.json
+runtime.txt
+Procfile

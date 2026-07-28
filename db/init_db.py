@@ -184,6 +184,46 @@ async def init_database() -> None:
             END
         """)
 
+        # Create chat_groups table for broadcast
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chat_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # Create chat_group_members table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chat_group_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL,
+                chat_id TEXT NOT NULL,
+                chat_title TEXT,
+                added_at TEXT NOT NULL,
+                FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Create broadcasts table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS broadcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                group_id INTEGER NOT NULL,
+                message_text TEXT,
+                message_type TEXT NOT NULL DEFAULT 'text',
+                file_id TEXT,
+                caption TEXT,
+                sent_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (group_id) REFERENCES chat_groups(id)
+            )
+        """)
+
         # Create indexes for performance
         # Vacancies indexes
         await db.execute("CREATE INDEX IF NOT EXISTS idx_vacancies_kwork_id ON vacancies(kwork_id)")

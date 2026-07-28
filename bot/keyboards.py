@@ -182,6 +182,44 @@ def stats_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def kwork_filters_keyboard() -> InlineKeyboardMarkup:
+    """Kwork filters menu keyboard."""
+    keyboard = [
+        [InlineKeyboardButton("🤖 AI-дружественные", callback_data="kwork_ai_friendly")],
+        [InlineKeyboardButton("💼 Простые задачи", callback_data="kwork_simple_tasks")],
+        [InlineKeyboardButton("💰 Фильтр по бюджету", callback_data="kwork_filter_budget")],
+        [InlineKeyboardButton("⏱ Фильтр по срокам", callback_data="kwork_filter_deadline")],
+        [InlineKeyboardButton("🏷 Фильтр по навыкам", callback_data="kwork_filter_skills")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def ai_friendly_filter_keyboard() -> InlineKeyboardMarkup:
+    """AI-friendly filter settings keyboard."""
+    keyboard = [
+        [InlineKeyboardButton("✅ Включить", callback_data="kwork_ai_enable")],
+        [InlineKeyboardButton("❌ Выключить", callback_data="kwork_ai_disable")],
+        [InlineKeyboardButton("🎯 ИИ-генерация", callback_data="ai_task_type_generate")],
+        [InlineKeyboardButton("💻 Вайб-кодинг", callback_data="ai_task_type_vibe")],
+        [InlineKeyboardButton("🧪 Авто-тестирование", callback_data="ai_task_type_test")],
+        [InlineKeyboardButton("◀️ Назад к фильтрам", callback_data="kwork_filters_back")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def tg_analysis_keyboard() -> InlineKeyboardMarkup:
+    """Telegram analysis menu keyboard."""
+    keyboard = [
+        [InlineKeyboardButton("📊 Анализ канала", callback_data="tg_analyze_channel")],
+        [InlineKeyboardButton("🎯 Поиск заказов", callback_data="tg_search_jobs")],
+        [InlineKeyboardButton("📈 Тренды и активность", callback_data="tg_analyze_trends")],
+        [InlineKeyboardButton("🤖 AI-анализ", callback_data="tg_ai_analyze")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 def vacancy_list_keyboard(page: int, total_pages: int, vacancies: list) -> InlineKeyboardMarkup:
     """Keyboard for paginated vacancy list."""
     keyboard = []

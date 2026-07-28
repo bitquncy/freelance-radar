@@ -1,4 +1,7 @@
 """Database queries for FreelanceRadar bot."""
+import json
+import re
+
 import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
@@ -725,15 +728,26 @@ async def search_vacancies(
     if not query or not query.strip():
         return []
 
-    # Escape FTS5 special characters
+    # Escape FTS5 special characters and prevent injection
     safe_query = query.replace('"', '""').strip()
     # Escape FTS5 operators by wrapping each word in quotes
     # This prevents injection through AND, OR, NOT, NEAR, etc.
     words = safe_query.split()
-    if len(words) > 1:
-        safe_query = " AND ".join(f'"{w}"' for w in words)
+    # Sanitize each word: only allow alphanumeric, quotes, and basic operators
+    sanitized_words = []
+    for w in words:
+        # Remove anything that's not alphanumeric, quote, *, or basic operator
+        cleaned = re.sub(r'[^\w\s"*()\-]+', '', w)
+        if cleaned:
+            sanitized_words.append(cleaned)
+
+    if not sanitized_words:
+        return []
+
+    if len(sanitized_words) > 1:
+        safe_query = " AND ".join(f'"{w}"' for w in sanitized_words)
     else:
-        safe_query = f'"{safe_query}"'
+        safe_query = f'"{sanitized_words[0]}"'
 
     cols = ', '.join(VACANCY_COLUMNS)
     async with db.execute(
@@ -817,6 +831,157 @@ async def search_vacancies_by_title(
         LIMIT ?
         """,
         (f"%{safe_query}%", limit)
+    ) as cursor:
+        rows = await cursor.fetchall()
+        return [_vacancy_from_row(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Chat Groups (for broadcast)
+# ---------------------------------------------------------------------------
+
+async def create_chat_group(
+    db: aiosqlite.Connection,
+    user_id: int,
+    name: str,
+) -> int:
+    """Create a new chat group. Returns group id."""
+    cursor = await db.execute(
+        "INSERT INTO chat_groups (user_id, name, created_at) VALUES (?, ?, ?)",
+        (user_id, name, datetime.now().isoformat()),
+    )
+    await db.commit()
+    return cursor.lastrowid
+
+
+async def get_chat_groups(
+    db: aiosqlite.Connection,
+    user_id: int,
+) -> List:
+    """Get all chat groups for a user."""
+    async with db.execute(
+        "SELECT id, user_id, name, created_at FROM chat_groups WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+        return rows
+
+
+async def get_chat_group(
+    db: aiosqlite.Connection,
+    group_id: int,
+):
+    """Get a single chat group by id."""
+    async with db.execute(
+        "SELECT id, user_id, name, created_at FROM chat_groups WHERE id = ?",
+        (group_id,),
+    ) as cursor:
+        return await cursor.fetchone()
+
+
+async def add_chat_to_group(
+    db: aiosqlite.Connection,
+    group_id: int,
+    chat_id: str,
+    chat_title: str = None,
+) -> None:
+    """Add a chat to a group."""
+    await db.execute(
+        "INSERT INTO chat_group_members (group_id, chat_id, chat_title, added_at) VALUES (?, ?, ?, ?)",
+        (group_id, chat_id, chat_title, datetime.now().isoformat()),
+    )
+    await db.commit()
+
+
+async def get_chat_group_members(
+    db: aiosqlite.Connection,
+    group_id: int,
+) -> List:
+    """Get all members of a chat group."""
+    async with db.execute(
+        "SELECT id, group_id, chat_id, chat_title, added_at FROM chat_group_members WHERE group_id = ?",
+        (group_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+        return rows
+
+
+async def delete_chat_group(
+    db: aiosqlite.Connection,
+    group_id: int,
+) -> None:
+    """Delete a chat group and all its members."""
+    await db.execute("DELETE FROM chat_group_members WHERE group_id = ?", (group_id,))
+    await db.execute("DELETE FROM chat_groups WHERE id = ?", (group_id,))
+    await db.commit()
+
+
+async def save_broadcast(
+    db: aiosqlite.Connection,
+    group_id: int,
+    message_text: str = None,
+    message_type: str = "text",
+    file_id: str = None,
+    caption: str = None,
+    sent_count: int = 0,
+    failed_count: int = 0,
+    status: str = "completed",
+    user_id: int = 0,
+) -> int:
+    """Save broadcast history."""
+    cursor = await db.execute(
+        """
+        INSERT INTO broadcasts (user_id, group_id, message_text, message_type, file_id, caption, sent_count, failed_count, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, group_id, message_text, message_type, file_id, caption, sent_count, failed_count, status, datetime.now().isoformat()),
+    )
+    await db.commit()
+    return cursor.lastrowid
+
+
+async def get_broadcast_history(
+    db: aiosqlite.Connection,
+    user_id: int,
+    limit: int = 20,
+) -> List:
+    """Get broadcast history for a user."""
+    async with db.execute(
+        """
+        SELECT b.id, b.user_id, b.group_id, b.message_text, b.message_type, b.file_id, b.caption,
+               b.sent_count, b.failed_count, b.status, b.created_at
+        FROM broadcasts b
+        JOIN chat_groups g ON b.group_id = g.id
+        WHERE g.user_id = ?
+        ORDER BY b.created_at DESC
+        LIMIT ?
+        """,
+        (user_id, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+        return rows
+
+
+# ---------------------------------------------------------------------------
+# Vacancies by source (for TG analysis)
+# ---------------------------------------------------------------------------
+
+async def get_vacancies_by_source(
+    db: aiosqlite.Connection,
+    source: str,
+    limit: int = 10,
+) -> List[JobVacancy]:
+    """Get vacancies by source type."""
+    cols = ', '.join(VACANCY_COLUMNS)
+    async with db.execute(
+        f"""
+        SELECT {cols}
+        FROM vacancies
+        WHERE source LIKE ?
+        ORDER BY fetched_at DESC
+        LIMIT ?
+        """,
+        (f"{source}%", limit),
     ) as cursor:
         rows = await cursor.fetchall()
         return [_vacancy_from_row(row) for row in rows]

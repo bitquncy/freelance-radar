@@ -98,11 +98,6 @@ async def show_vacancy(update: Update, context: ContextTypes.DEFAULT_TYPE, kwork
         )
 
 
-def _format_vacancy_text(vacancy) -> str:
-    """Format vacancy text with HTML and styling (full detail view)."""
-    return format_vacancy_full(vacancy)
-
-
 @owner_only
 async def vacancy_suitable(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Mark vacancy as suitable."""

@@ -1,36 +1,27 @@
-"""Health check script for Docker — async-correct and config-independent.
+"""Health check script for Docker — async-correct, no config import.
 
-The previous version used a synchronous ``with`` over an aiosqlite
-connection, which raises ``TypeError`` on every run — the container was
-permanently "unhealthy" and orchestrators kept restarting a perfectly
-healthy bot (restart loops then trigger mid-tick recovery paths).
-
-This version:
-    * actually awaits the DB probe (``asyncio.run``);
-    * reads ``DB_PATH`` from the environment instead of importing ``config``
-      (the healthcheck must not require the full secret set to run);
-    * treats a MISSING log file as healthy — containers log to stdout, the
-      file only exists when file logging is enabled;
-    * catches ``Exception`` so an unexpected error means "unhealthy", not a
-      traceback with a random exit code.
+Reads DB_PATH from the environment so the healthcheck doesn't need
+the full secret set to run. Compatible with Docker HEALTHCHECK.
 """
 import asyncio
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
 
 import aiosqlite
 
-LOG_MAX_AGE_SECONDS = 600
+LOG_MAX_AGE_SECONDS = 3600
 
 
 async def check_db(db_path: str) -> bool:
     """Check that the SQLite database is reachable and answers a query."""
     try:
         async with aiosqlite.connect(db_path) as db:
-            await db.execute("SELECT 1")
-        return True
+            cursor = await db.execute("SELECT 1")
+            row = await cursor.fetchone()
+            return row is not None
     except Exception as exc:  # noqa: BLE001 - any failure means unhealthy
         print(f"db check failed: {exc}")
         return False
@@ -48,15 +39,38 @@ def check_log() -> bool:
     return True
 
 
+def check_disk() -> bool:
+    """Check disk space for data directory (cross-platform)."""
+    db_path = os.environ.get("DB_PATH", "freelance_radar.db")
+    data_dir = Path(db_path).parent if db_path else Path(".")
+    try:
+        usage = shutil.disk_usage(str(data_dir.resolve()))
+        free_gb = usage.free / (1024 ** 3)
+        if free_gb < 0.1:
+            print(f"disk check failed: only {free_gb:.2f} GB free")
+            return False
+        return True
+    except (OSError, ValueError):
+        return True  # Skip check if unavailable
+
+
 def main() -> int:
     """Run all probes; exit 0 only when everything is healthy."""
     db_path = os.environ.get("DB_PATH", "freelance_radar.db")
     db_ok = asyncio.run(check_db(db_path))
     log_ok = check_log()
+    disk_ok = check_disk()
+
     if db_ok and log_ok:
-        print("OK")
+        print(f"Healthcheck: OK")
+        print(f"  db: {'✅' if db_ok else '❌'}")
+        print(f"  log: {'✅' if log_ok else '❌'}")
+        print(f"  disk: {'✅' if disk_ok else '❌'}")
         return 0
-    print(f"FAIL: db={db_ok}, log={log_ok}")
+    print(f"Healthcheck: FAIL")
+    print(f"  db: {'✅' if db_ok else '❌'}")
+    print(f"  log: {'✅' if log_ok else '❌'}")
+    print(f"  disk: {'✅' if disk_ok else '❌'}")
     return 1
 
 

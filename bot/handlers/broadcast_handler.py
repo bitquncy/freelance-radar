@@ -6,6 +6,8 @@ from telegram.ext import (
     CallbackQueryHandler, MessageHandler, filters
 )
 
+import telegram
+
 from services.logger_config import get_logger
 from bot.auth import owner_only
 from db import queries
@@ -121,7 +123,7 @@ async def add_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 "Отправьте следующий ID или /done.",
                 parse_mode=None
             )
-        except Exception as e:
+        except (aiosqlite.Error, ValueError, TypeError, KeyError) as e:
             await update.message.reply_text(
                 f"❌ Ошибка: {e}\nПопробуйте другой ID или /done."
             )
@@ -149,18 +151,18 @@ async def _resolve_chat_id(text: str, context) -> str:
         try:
             chat = await context.bot.get_chat(username)
             return str(chat.id)
-        except Exception as e:
+        except (telegram.error.TelegramError, ValueError, TypeError) as e:
             logger.warning("broadcast.resolve_failed", text=text, error=str(e))
-            return username  # Return the username as fallback
+            return username
 
     # Check if it's a @username
     if text.startswith('@'):
         try:
             chat = await context.bot.get_chat(text)
             return str(chat.id)
-        except Exception as e:
+        except (telegram.error.TelegramError, ValueError, TypeError) as e:
             logger.warning("broadcast.resolve_failed", text=text, error=str(e))
-            return text  # Return as fallback
+            return text
 
     # Unknown format
     return text
@@ -205,17 +207,20 @@ async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     text = "📋 **Мои группы чатов:**\n\n"
     keyboard = []
     for g in groups:
+        # g is a tuple: (id, user_id, name, created_at)
+        g_id = g[0]
+        g_name = g[2]
         # Get member count
         async with aiosqlite.connect(DB_PATH) as db:
-            members = await queries.get_chat_group_members(db, g.id)
+            members = await queries.get_chat_group_members(db, g_id)
         count = len(members)
-        text += f"• **{g.name}** (ID: {g.id}) — {count} чатов\n"
+        text += f"• **{g_name}** (ID: {g_id}) — {count} чатов\n"
         keyboard.append([
             InlineKeyboardButton(
-                f"👁 {g.name} ({count})",
-                callback_data=f"bcast_group_detail_{g.id}"
+                f"👁 {g_name} ({count})",
+                callback_data=f"bcast_group_detail_{g_id}"
             ),
-            InlineKeyboardButton("🗑", callback_data=f"bcast_group_delete_{g.id}")
+            InlineKeyboardButton("🗑", callback_data=f"bcast_group_delete_{g_id}")
         ])
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
 
@@ -242,21 +247,27 @@ async def group_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.edit_message_text("❌ Группа не найдена.")
         return
 
-    text = f"👁 **Группа: {group.name}**\n\n"
-    text += f"ID: {group.id}\n"
+    # group is a tuple: (id, user_id, name, created_at)
+    group_id = group[0]
+    group_name = group[2]
+
+    text = f"👁 **Группа: {group_name}**\n\n"
+    text += f"ID: {group_id}\n"
     text += f"Чатов: {len(members)}\n\n"
 
     if members:
         text += "**Чаты:**\n"
         for m in members[:20]:
-            text += f"  • {m.chat_title or m.chat_id}\n"
+            # m is a tuple: (id, group_id, chat_id, chat_title, added_at)
+            m_title = m[3] or m[2]
+            text += f"  • {m_title}\n"
         if len(members) > 20:
             text += f"  ... и ещё {len(members) - 20}\n"
 
     keyboard = [
-        [InlineKeyboardButton("➕ Добавить чат", callback_data=f"bcast_group_add_chat_{group.id}")],
-        [InlineKeyboardButton("🗑 Удалить чат", callback_data=f"bcast_group_remove_chat_{group.id}")],
-        [InlineKeyboardButton("✏️ Переименовать", callback_data=f"bcast_group_rename_{group.id}")],
+        [InlineKeyboardButton("➕ Добавить чат", callback_data=f"bcast_group_add_chat_{group_id}")],
+        [InlineKeyboardButton("🗑 Удалить чат", callback_data=f"bcast_group_remove_chat_{group_id}")],
+        [InlineKeyboardButton("✏️ Переименовать", callback_data=f"bcast_group_rename_{group_id}")],
         [InlineKeyboardButton("◀️ К списку", callback_data="bcast_group_list")],
     ]
 
@@ -306,12 +317,15 @@ async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = "📨 **Выберите группу чатов для рассылки:**\n\n"
     keyboard = []
     for g in groups:
+        # g is a tuple: (id, user_id, name, created_at)
+        g_id = g[0]
+        g_name = g[2]
         async with aiosqlite.connect(DB_PATH) as db:
-            members = await queries.get_chat_group_members(db, g.id)
+            members = await queries.get_chat_group_members(db, g_id)
         keyboard.append([
             InlineKeyboardButton(
-                f"{g.name} ({len(members)} чатов)",
-                callback_data=f"bcast_select_group_{g.id}"
+                f"{g_name} ({len(members)} чатов)",
+                callback_data=f"bcast_select_group_{g_id}"
             )
         ])
     keyboard.append([InlineKeyboardButton("◀️ Отмена", callback_data="bcast_cancel")])
@@ -337,8 +351,10 @@ async def group_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         group = await queries.get_chat_group(db, group_id)
         members = await queries.get_chat_group_members(db, group_id)
 
+    # group is a tuple: (id, user_id, name, created_at)
+    group_name = group[2] if group else "Unknown"
     await query.edit_message_text(
-        f"📨 **Группа: {group.name}** ({len(members)} чатов)\n\n"
+        f"📨 **Группа: {group_name}** ({len(members)} чатов)\n\n"
         "Отправьте сообщение для рассылки.\n"
         "Поддерживается: текст, фото, документ.\n\n"
         "/cancel — отмена",
@@ -369,11 +385,14 @@ async def receive_broadcast_message(update: Update, context: ContextTypes.DEFAUL
         text += "⚠️ Неизвестный тип сообщения\n"
 
     group_id = context.user_data.get('broadcast_group_id')
+
     async with aiosqlite.connect(DB_PATH) as db:
         group = await queries.get_chat_group(db, group_id)
         members = await queries.get_chat_group_members(db, group_id)
 
-    text += f"\n🎯 Группа: {group.name} ({len(members)} чатов)\n"
+    # group is a tuple: (id, user_id, name, created_at)
+    group_name = group[2] if group else "Unknown"
+    text += f"\n🎯 Группа: {group_name} ({len(members)} чатов)\n"
     text += "\nОтправить?"
 
     await update.message.reply_text(
@@ -409,12 +428,18 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             return ConversationHandler.END
 
-        # Send to all chats in the group
+        # group is a tuple: (id, user_id, name, created_at)
+        group_name = group[2] if group else "Unknown"
+
+        import asyncio
+        # Send to all chats in the group with rate limiting
         sent_count = 0
         failed_count = 0
+        broadcast_delay = 0.5  # 500ms between sends to avoid Telegram flood
 
         for member in members:
-            chat_id = member.chat_id
+            # member is a tuple: (id, group_id, chat_id, chat_title, added_at)
+            chat_id = member[2]
             try:
                 if broadcast_msg.text:
                     await context.bot.send_message(
@@ -434,7 +459,8 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                         caption=broadcast_msg.caption
                     )
                 sent_count += 1
-            except Exception as e:
+                await asyncio.sleep(broadcast_delay)
+            except (telegram.error.TelegramError, ValueError, TypeError) as e:
                 logger.warning("broadcast.send_failed", chat_id=chat_id, error=str(e))
                 failed_count += 1
 
@@ -448,14 +474,15 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 caption=broadcast_msg.caption,
                 sent_count=sent_count,
                 failed_count=failed_count,
-                status="completed"
+                status="completed",
+                user_id=OWNER_CHAT_ID
             )
 
         result_text = "✅ **Рассылка завершена!**\n\n"
         result_text += f"📊 Отправлено: {sent_count}\n"
         result_text += f"❌ Ошибок: {failed_count}\n"
         result_text += f"👥 Всего чатов: {len(members)}\n"
-        result_text += f"🎯 Группа: {group.name}"
+        result_text += f"🎯 Группа: {group_name}"
 
         await query.edit_message_text(
             result_text,
@@ -496,8 +523,13 @@ async def broadcast_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = "📜 **История рассылок:**\n\n"
     keyboard = []
     for b in broadcasts[:20]:
-        status_emoji = "✅" if b.status == "completed" else "⏳"
-        text += f"{status_emoji} {b.created_at[:16]} — {b.sent_count} отправлено, {b.failed_count} ошибок\n"
+        # b is a tuple: (id, user_id, group_id, message_text, message_type, file_id, caption, sent_count, failed_count, status, created_at)
+        b_status = b[9]
+        b_created = b[10]
+        b_sent = b[7]
+        b_failed = b[8]
+        status_emoji = "✅" if b_status == "completed" else "⏳"
+        text += f"{status_emoji} {str(b_created)[:16]} — {b_sent} отправлено, {b_failed} ошибок\n"
     text += f"\nВсего: {len(broadcasts)}"
 
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])

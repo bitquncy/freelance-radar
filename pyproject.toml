@@ -1,3 +1,11 @@
+[project]
+name = "freelance-radar"
+version = "2.1.0"
+description = "Telegram bot for monitoring freelance platforms and job aggregation"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+
 [tool.black]
 line-length = 88
 target-version = ['py311']

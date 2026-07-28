@@ -80,9 +80,16 @@ logs/
 *.db-shm
 *.db-wal
 
-# Archives must never be committed (AGENTS.md §8: leak incident)
+# Archives must never be committed
 *.zip
 
 # V2 database files
 freelance_radar_v2.db
 freelance_radar_v2.db-*
+
+# Documentation templates / audit files
+DEPLOYMENT_SUCCESS.md
+промпт на проверку.md
+
+# Railway example (has placeholder secrets)
+.railway/

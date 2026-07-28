@@ -75,6 +75,7 @@ async def profile_skills_start(update: Update, context: ContextTypes.DEFAULT_TYP
     return ENTERING_SKILLS
 
 
+@owner_only
 async def save_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save skills."""
     skills = update.message.text.strip()
@@ -101,6 +102,7 @@ async def profile_experience_start(update: Update, context: ContextTypes.DEFAULT
     return ENTERING_EXPERIENCE
 
 
+@owner_only
 async def save_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save experience years."""
     try:
@@ -131,6 +133,7 @@ async def profile_categories_start(update: Update, context: ContextTypes.DEFAULT
     return ENTERING_CATEGORIES
 
 
+@owner_only
 async def save_categories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save preferred categories."""
     categories = update.message.text.strip()
@@ -157,6 +160,7 @@ async def profile_hourly_rate_start(update: Update, context: ContextTypes.DEFAUL
     return ENTERING_HOURLY_RATE
 
 
+@owner_only
 async def save_hourly_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save hourly rate."""
     try:
@@ -187,6 +191,7 @@ async def profile_strong_sides_start(update: Update, context: ContextTypes.DEFAU
     return ENTERING_STRONG_SIDES
 
 
+@owner_only
 async def save_strong_sides(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save strong sides."""
     sides = update.message.text.strip()
@@ -213,6 +218,7 @@ async def profile_bio_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ENTERING_BIO
 
 
+@owner_only
 async def save_bio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save bio."""
     bio = update.message.text.strip()
@@ -239,6 +245,7 @@ async def profile_portfolio_start(update: Update, context: ContextTypes.DEFAULT_
     return ENTERING_PORTFOLIO
 
 
+@owner_only
 async def save_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save portfolio URL."""
     url = update.message.text.strip()

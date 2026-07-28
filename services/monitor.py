@@ -233,3 +233,4 @@ class MonitorService:
         """Cleanup resources."""
         if self.telegram_parser:
             await self.telegram_parser.disconnect()
+        await self.kwork_parser.cleanup()

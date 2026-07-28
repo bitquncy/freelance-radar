@@ -73,11 +73,21 @@ async def check_and_notify_streaming(
         is_scheduled: True if called from scheduler (not user command)
         progress_message: Optional message object to update progress
     """
-    async with _state._lock:
-        if _state.is_checking:
-            logger.info("scheduler.already_checking")
-            return
-        _state.is_checking = True
+    # Try to acquire lock with timeout to prevent hanging
+    try:
+        await asyncio.wait_for(_state._lock.acquire(), timeout=30.0)
+    except asyncio.TimeoutError:
+        logger.error("scheduler.lock_timeout", previous_check_stuck=True)
+        _state.is_checking = False
+        _state._lock = asyncio.Lock()  # Reset lock
+        await _state._lock.acquire()
+
+    if _state.is_checking:
+        _state._lock.release()
+        logger.info("scheduler.already_checking")
+        return
+    _state.is_checking = True
+    _state._lock.release()
 
     logger.info("scheduler.check_started")
     _state.last_check_time = datetime.now()
