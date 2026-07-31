@@ -60,6 +60,8 @@ class Config(BaseSettings):
         default="sqlite+aiosqlite:///freelance_radar_v2.db",
         description="V2 database URL (PostgreSQL in production, AGENTS.md §4.2)",
     )
+    ENVIRONMENT: str = Field(default="development")
+    BOT_REPLICAS: int = Field(default=1, ge=1)
     REDIS_URL: Optional[str] = Field(
         default=None, description="Redis URL (dedup cache/queue, optional)"
     )

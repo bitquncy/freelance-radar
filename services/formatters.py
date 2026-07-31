@@ -2,6 +2,7 @@
 from db.models import JobVacancy
 from constants import Priority, PRIORITY_EMOJI, PRIORITY_MAP, BULLET
 from services.text_utils import esc
+from emoji_config import E
 
 
 def get_priority_emoji(priority: str) -> str:
@@ -29,22 +30,22 @@ def format_vacancy_notification(vacancy: JobVacancy, analysis: dict) -> str:
 
     line2 = ""
     if vacancy.budget_min and vacancy.budget_max:
-        line2 = f"\U0001f4b0 <b>{vacancy.budget_min:,} \u2013 {vacancy.budget_max:,} \u20bd</b>"
+        line2 = f"{E.MONEY} <b>{vacancy.budget_min:,} \u2013 {vacancy.budget_max:,} \u20bd</b>"
     elif vacancy.budget:
-        line2 = f"\U0001f4b0 <b>{esc(vacancy.budget)}</b>"
+        line2 = f"{E.MONEY} <b>{esc(vacancy.budget)}</b>"
 
     metrics = []
     if vacancy.deadline:
         metrics.append(f"\u23f3 {esc(vacancy.deadline)}")
     if vacancy.proposals_count is not None:
-        metrics.append(f"\U0001f4ca {vacancy.proposals_count} предл.")
+        metrics.append(f"{E.CHART} {vacancy.proposals_count} предл.")
     if vacancy.customer_rating is not None:
         rating_str = f"\u2b50 {vacancy.customer_rating}"
         if vacancy.customer_orders:
             rating_str += f" ({vacancy.customer_orders})"
         metrics.append(rating_str)
     elif vacancy.customer_orders:
-        metrics.append(f"\U0001f4e6 {vacancy.customer_orders} заказов")
+        metrics.append(f"{E.PACKAGE} {vacancy.customer_orders} заказов")
     line3 = f" {BULLET} ".join(metrics) if metrics else ""
 
     line4 = f"<b>{esc(vacancy.title)}</b>"
@@ -58,10 +59,10 @@ def format_vacancy_notification(vacancy: JobVacancy, analysis: dict) -> str:
     if vacancy.skills:
         skills = vacancy.skills_list
         if skills:
-            line6 = f"<b>\U0001f6e0 \u041d\u0430\u0432\u044b\u043a\u0438:</b> {esc(', '.join(skills[:6]))}"
+            line6 = f"<b>{E.TOOLS} \u041d\u0430\u0432\u044b\u043a\u0438:</b> {esc(', '.join(skills[:6]))}"
 
     url = vacancy.url or ""
-    line7 = f'\U0001f517 <a href="{esc(url)}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u0430 Kwork</a>'
+    line7 = f'{E.LINK} <a href="{esc(url)}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u0430 Kwork</a>'
 
     parts = [line1]
     if line2:
@@ -95,29 +96,29 @@ def format_vacancy_full(vacancy: JobVacancy) -> str:
 
     line3 = ""
     if vacancy.budget_min and vacancy.budget_max:
-        line3 = f"\U0001f4b0 <b>{vacancy.budget_min:,} \u2013 {vacancy.budget_max:,} \u20bd</b>"
+        line3 = f"{E.MONEY} <b>{vacancy.budget_min:,} \u2013 {vacancy.budget_max:,} \u20bd</b>"
     elif vacancy.budget:
-        line3 = f"\U0001f4b0 <b>{esc(vacancy.budget)}</b>"
+        line3 = f"{E.MONEY} <b>{esc(vacancy.budget)}</b>"
 
     metrics = []
     if vacancy.deadline:
         metrics.append(f"\u23f3 {esc(vacancy.deadline)}")
     if vacancy.deadline_days:
-        metrics.append(f"\U0001f4c5 {vacancy.deadline_days} \u0434\u043d.")
+        metrics.append(f"{E.CALENDAR} {vacancy.deadline_days} \u0434\u043d.")
     if vacancy.proposals_count is not None:
-        metrics.append(f"\U0001f4ca {vacancy.proposals_count} предл.")
+        metrics.append(f"{E.CHART} {vacancy.proposals_count} предл.")
     if vacancy.customer_rating is not None:
         rating_str = f"\u2b50 {vacancy.customer_rating}"
         if vacancy.customer_orders:
             rating_str += f" ({vacancy.customer_orders} \u0437\u0430\u043a\u0430\u0437\u043e\u0432)"
         metrics.append(rating_str)
     elif vacancy.customer_orders:
-        metrics.append(f"\U0001f4e6 {vacancy.customer_orders} \u0437\u0430\u043a\u0430\u0437\u043e\u0432")
+        metrics.append(f"{E.PACKAGE} {vacancy.customer_orders} \u0437\u0430\u043a\u0430\u0437\u043e\u0432")
     line4 = f" {BULLET} ".join(metrics) if metrics else ""
 
     line5 = ""
     if vacancy.category:
-        line5 = f"\U0001f4c1 {esc(vacancy.category)}"
+        line5 = f"{E.FILES} {esc(vacancy.category)}"
         if vacancy.subcategory:
             line5 += f" \u2192 {esc(vacancy.subcategory)}"
 
@@ -130,15 +131,15 @@ def format_vacancy_full(vacancy: JobVacancy) -> str:
     if vacancy.skills:
         skills = vacancy.skills_list
         if skills:
-            line7 = f"<b>\U0001f6e0 \u041d\u0430\u0432\u044b\u043a\u0438:</b> {esc(', '.join(skills[:6]))}"
+            line7 = f"<b>{E.TOOLS} \u041d\u0430\u0432\u044b\u043a\u0438:</b> {esc(', '.join(skills[:6]))}"
 
     line8 = ""
     if vacancy.ai_risks:
         line8 = f"\u26a0\ufe0f \u0420\u0438\u0441\u043a\u0438: {esc(vacancy.ai_risks)}"
 
     url = vacancy.url or ""
-    line9 = f'\U0001f517 <a href="{esc(url)}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u043a\u0430\u0437</a>'
-    line10 = f"\U0001f4e1 {esc(vacancy.source)} {BULLET} ID: <code>{esc(vacancy.kwork_id)}</code>"
+    line9 = f'{E.LINK} <a href="{esc(url)}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u043a\u0430\u0437</a>'
+    line10 = f"{E.RADAR} {esc(vacancy.source)} {BULLET} ID: <code>{esc(vacancy.kwork_id)}</code>"
 
     parts = [line1, line2]
     if line3:

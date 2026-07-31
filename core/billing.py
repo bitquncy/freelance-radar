@@ -29,6 +29,9 @@ logger = get_logger(__name__)
 PAYLOAD_PREFIX = "v2sub"
 SUBSCRIPTION_DAYS = 30
 
+#: The single plan sold in the bot («Радар PRO», 300 ₽/мес).
+PRIMARY_TIER = tariffs.PRIMARY_TIER
+
 #: Tiers purchasable via Telegram Payments (§7). TRIAL is never sold.
 PURCHASABLE_TIERS = (
     SubscriptionTier.BASIC,
@@ -55,7 +58,9 @@ class PaymentIntent:
         return self.amount_rub * 100
 
 
-def build_payload(tier: SubscriptionTier, days: int = SUBSCRIPTION_DAYS) -> str:
+def build_payload(
+    tier: SubscriptionTier = PRIMARY_TIER, days: int = SUBSCRIPTION_DAYS
+) -> str:
     """Serialize a purchase intent into the invoice payload."""
     return f"{PAYLOAD_PREFIX}:{tier.value}:{days}"
 
@@ -113,13 +118,20 @@ async def apply_paid_subscription(
         was already processed (duplicate update) and nothing changed.
     """
     now = utcnow()
+    # Serialize entitlement mutation. The subscription insert and this locked
+    # user-row update remain in the caller's single transaction.
+    locked_user = (
+        await session.execute(
+            select(User).where(User.id == user.id).with_for_update()
+        )
+    ).scalar_one()
     base = now
     if (
-        user.subscription_tier is intent.tier
-        and user.subscription_expires_at is not None
-        and user.subscription_expires_at > now
+        locked_user.subscription_tier is intent.tier
+        and locked_user.subscription_expires_at is not None
+        and locked_user.subscription_expires_at > now
     ):
-        base = user.subscription_expires_at
+        base = locked_user.subscription_expires_at
     period_end = base + timedelta(days=intent.days)
 
     subscription = Subscription(
@@ -152,8 +164,14 @@ async def apply_paid_subscription(
         )
         return existing, False
 
+    locked_user.subscription_tier = intent.tier
+    locked_user.subscription_expires_at = period_end
+    # Keep a separately supplied instance coherent for callers/tests.
     user.subscription_tier = intent.tier
     user.subscription_expires_at = period_end
+    # New paid period → the expiry nudge is eligible again (one per period).
+    locked_user.expiry_notified_at = None
+    user.expiry_notified_at = None
     await session.flush()
     logger.info(
         "billing.subscription_activated",

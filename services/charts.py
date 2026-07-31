@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 from services.logger_config import get_logger
+from emoji_config import P
 
 logger = get_logger(__name__)
 
@@ -148,7 +149,7 @@ def generate_priority_distribution_chart(
         if total == 0:
             return None
 
-        labels = ["🔥 High", "⭐ Medium", "📌 Low"]
+        labels = [f"{P.FIRE} High", f"{P.STAR} Medium", f"{P.PIN} Low"]
         counts = [high, medium, low]
         colors = ["#F44336", "#FF9800", "#9E9E9E"]
 

@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from services.logger_config import get_logger
-from bot.auth import owner_only
+from bot.auth import check_owner, deny_access, owner_only
 from bot.keyboards import main_menu_keyboard, stats_keyboard
 from services.rate_limiter import KworkRateLimiter
 from services.blacklist import BlacklistService
@@ -24,20 +24,45 @@ from config import DB_PATH
 logger = get_logger(__name__)
 
 
-@owner_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command."""
-    await update.message.reply_text(
-        "\U0001f44b \u0414\u043e\u0431\u0440\u043e \u043f\u043e\u0436\u0430\u043b\u043e\u0432\u0430\u0442\u044c \u0432 FreelanceRadar!\n\n"
-        "\u042f \u043f\u043e\u043c\u043e\u0433\u0443 \u0432\u0430\u043c \u043c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u0442\u044c \u0444\u0440\u0438\u043b\u0430\u043d\u0441-\u0431\u0438\u0440\u0436\u0438 \u0438 \u043d\u0430\u0445\u043e\u0434\u0438\u0442\u044c \u043f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\u0438\u0435 \u0432\u0430\u043a\u0430\u043d\u0441\u0438\u0438.\n\n"
-        "\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043c\u0435\u043d\u044e \u043d\u0438\u0436\u0435 \u0434\u043b\u044f \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f:",
-        reply_markup=main_menu_keyboard(),
-    )
+    """Handle /start — the very first screen every user sees.
+
+    Open to everyone when the multi-tenant V2 is enabled: a paying customer
+    must never be greeted with "у вас нет доступа". Owner-only admin
+    commands stay decorated individually. Legacy single-owner installs
+    (V2 off) keep the old restricted behaviour.
+    """
+    from config import get_config
+
+    if not get_config().RADAR_V2_ENABLED:
+        if not check_owner(update):
+            await deny_access(update)
+            return
+        await update.message.reply_text(
+            "\U0001f44b Добро пожаловать в FreelanceRadar!\n\n"
+            "Я помогу мониторить фриланс-биржи и находить подходящие заказы.\n\n"
+            "Используйте меню ниже для управления:",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    from bot.handlers.v2.onboarding import radar_entry
+
+    await radar_entry(update, context)
 
 
-@owner_only
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /help command."""
+    """Handle /help — user-facing help (V2) or the legacy owner cheatsheet."""
+    from config import get_config
+
+    if get_config().RADAR_V2_ENABLED:
+        from bot.handlers.v2.menu import show_help
+
+        await show_help(update, context)
+        return
+    if not check_owner(update):
+        await deny_access(update)
+        return
     help_text = """
 \U0001f4d6 **\u0421\u043f\u0440\u0430\u0432\u043a\u0430 \u043f\u043e FreelanceRadar**
 

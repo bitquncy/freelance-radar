@@ -15,6 +15,7 @@ from bot.handlers.v2.common import get_or_create_user, pending
 from core import crm
 from core.db import get_session_factory
 from core.models import Client, Interaction, PipelineStage, Reminder
+from emoji_config import E, P, btn_neutral
 
 
 def _list_keyboard(clients: List[Client]) -> InlineKeyboardMarkup:
@@ -27,7 +28,15 @@ def _list_keyboard(clients: List[Client]) -> InlineKeyboardMarkup:
         ]
         for c in clients[:20]
     ]
-    return InlineKeyboardMarkup(rows) if rows else InlineKeyboardMarkup([[]])
+    # Always offer a way back — an empty CRM must not be a dead-end screen.
+    rows.append(
+        [
+            InlineKeyboardButton(
+                btn_neutral("В меню", P.BACK), callback_data="v2:menu"
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
 
 
 async def clients_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,10 +55,13 @@ async def clients_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await session.commit()
     active = [c for c in clients if c.pipeline_stage in crm.ACTIVE_STAGES]
     text = (
-        f"\U0001f465 <b>Клиенты</b> — активных: {len(active)} из {len(clients)}"
+        f"{E.PEOPLE} <b>Клиенты</b> — активных: {len(active)} из {len(clients)}"
         if clients
-        else "\U0001f465 <b>Клиенты</b>\nПока пусто. Карточка создаётся автоматически "
-        "при отправке отклика."
+        else (
+            f"{E.PEOPLE} <b>Клиенты</b>\n"
+            "Пока пусто. Карточка создаётся автоматически "
+            "при отправке отклика."
+        )
     )
     markup = _list_keyboard(clients)
     if update.message is not None:
@@ -72,7 +84,7 @@ async def client_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         user, _ = await get_or_create_user(session, update.effective_user)
         client = await session.get(Client, client_id)
         if client is None or client.user_id != user.id:
-            await query.answer("Клиент не найден.", show_alert=True)
+            await query.answer(f"{P.CROSS} Клиент не найден.", show_alert=True)
             return
         result = await session.execute(
             select(Interaction)
@@ -101,7 +113,7 @@ async def client_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         user, _ = await get_or_create_user(session, update.effective_user)
         client = await session.get(Client, int(client_id_raw))
         if client is None or client.user_id != user.id:
-            await query.answer("Клиент не найден.", show_alert=True)
+            await query.answer(f"{P.CROSS} Клиент не найден.", show_alert=True)
             return
         try:
             await crm.change_stage(session, client, PipelineStage(stage_raw))
@@ -129,7 +141,7 @@ async def client_note_start(
         user, _ = await get_or_create_user(session, update.effective_user)
         client = await session.get(Client, client_id)
         if client is None or client.user_id != user.id:
-            await query.answer("Клиент не найден.", show_alert=True)
+            await query.answer(f"{P.CROSS} Клиент не найден.", show_alert=True)
             return
         await session.commit()
     pending(context)["v2_note_client"] = client_id
@@ -151,7 +163,7 @@ async def apply_client_note(
         user, _ = await get_or_create_user(session, update.effective_user)
         client = await session.get(Client, client_id)
         if client is None or client.user_id != user.id:
-            await update.message.reply_text("Клиент не найден.")
+            await update.message.reply_text(f"{P.CROSS} Клиент не найден.")
             return
         note = text.strip()[:1000]
         client.notes = f"{client.notes}\n{note}".strip() if client.notes else note
@@ -173,15 +185,15 @@ async def reminder_snooze(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         user, _ = await get_or_create_user(session, update.effective_user)
         reminder = await session.get(Reminder, reminder_id)
         if reminder is None:
-            await query.answer("Напоминание не найдено.", show_alert=True)
+            await query.answer(f"{P.CROSS} Напоминание не найдено.", show_alert=True)
             return
         client = await session.get(Client, reminder.client_id)
         if client is None or client.user_id != user.id:
-            await query.answer("Напоминание не найдено.", show_alert=True)
+            await query.answer(f"{P.CROSS} Напоминание не найдено.", show_alert=True)
             return
         await crm.snooze_reminder(session, reminder)
         await session.commit()
-    await query.answer("Отложено на 24 часа.")
+    await query.answer(f"{P.HOURGLASS} Отложено на 24 часа.")
     delete = getattr(query.message, "delete", None)
     if delete is not None:
         await delete()
@@ -206,9 +218,10 @@ async def reminder_write(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if (
             reminder is None
             or client is None
+            or reminder.client_id != client.id
             or client.user_id != user.id
         ):
-            await query.answer("Напоминание не найдено.", show_alert=True)
+            await query.answer(f"{P.CROSS} Напоминание не найдено.", show_alert=True)
             return
         await crm.complete_reminder(session, reminder)
         await crm.log_interaction(

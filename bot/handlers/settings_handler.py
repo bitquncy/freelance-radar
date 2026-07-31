@@ -16,6 +16,7 @@ from bot.keyboards import (
 from db import queries
 from db.models import UserSettings, FreelancerProfile
 from config import DB_PATH, OWNER_CHAT_ID, DEFAULT_COOLDOWN_SEC
+from emoji_config import P
 
 logger = get_logger(__name__)
 
@@ -31,7 +32,7 @@ logger = get_logger(__name__)
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show settings menu."""
     await update.message.reply_text(
-        "⚙️ Настройки бота",
+        f"{P.SETTINGS} Настройки бота",
         reply_markup=settings_keyboard()
     )
 
@@ -50,7 +51,7 @@ async def settings_analysis_prompt(update: Update, context: ContextTypes.DEFAULT
     current = settings.analysis_prompt if settings and settings.analysis_prompt else "Не установлен"
 
     await query.edit_message_text(
-        f"📝 Текущий промпт для анализа:\n\n{current}\n\n"
+        f"{P.NOTE} Текущий промпт для анализа:\n\n{current}\n\n"
         "Отправьте новый промпт или /cancel для отмены:",
         reply_markup=cancel_keyboard()
     )
@@ -77,7 +78,7 @@ async def settings_response_prompt(update: Update, context: ContextTypes.DEFAULT
     current = settings.response_prompt if settings and settings.response_prompt else "Не установлен"
 
     await query.edit_message_text(
-        f"💬 Текущий промпт для откликов:\n\n{current}\n\n"
+        f"{P.COMMENT} Текущий промпт для откликов:\n\n{current}\n\n"
         "Отправьте новый промпт или /cancel для отмены:",
         reply_markup=cancel_keyboard()
     )
@@ -109,7 +110,7 @@ async def settings_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         current = "Не установлен"
 
     await query.edit_message_text(
-        f"💰 Текущий диапазон бюджета:\n\n{current}\n\n"
+        f"{P.MONEY} Текущий диапазон бюджета:\n\n{current}\n\n"
         "Отправьте диапазон в формате: мин макс\n"
         "Например: 5000 50000\n\n"
         "Или /cancel для отмены:",
@@ -126,7 +127,7 @@ async def save_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     if len(parts) != 2:
         await update.message.reply_text(
-            "❌ Неверный формат. Используйте: мин макс\nНапример: 5000 50000"
+            f"{P.CROSS} Неверный формат. Используйте: мин макс\nНапример: 5000 50000"
         )
         return ENTERING_BUDGET
 
@@ -135,25 +136,25 @@ async def save_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         max_budget = int(parts[1])
     except ValueError:
         await update.message.reply_text(
-            "❌ Неверный формат. Используйте числа.\nНапример: 5000 50000"
+            f"{P.CROSS} Неверный формат. Используйте числа.\nНапример: 5000 50000"
         )
         return ENTERING_BUDGET
 
     if min_budget < 0 or max_budget < 0:
         await update.message.reply_text(
-            "❌ Бюджет не может быть отрицательным."
+            f"{P.CROSS} Бюджет не может быть отрицательным."
         )
         return ENTERING_BUDGET
 
     if min_budget > max_budget:
         await update.message.reply_text(
-            "❌ Минимальный бюджет не может быть больше максимального."
+            f"{P.CROSS} Минимальный бюджет не может быть больше максимального."
         )
         return ENTERING_BUDGET
 
     await _save_user_setting(update, min_budget=min_budget, max_budget=max_budget)
     await update.message.reply_text(
-        f"✅ Диапазон бюджета сохранён: {min_budget} - {max_budget} руб.",
+        f"{P.CHECK} Диапазон бюджета сохранён: {min_budget} - {max_budget} руб.",
         reply_markup=settings_keyboard()
     )
     return ConversationHandler.END
@@ -174,7 +175,7 @@ async def settings_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     current_minutes = current // 60
 
     await query.edit_message_text(
-        f"⏱ Текущий кулдаун: {current_minutes} минут\n\n"
+        f"{P.TIMER} Текущий кулдаун: {current_minutes} минут\n\n"
         "Отправьте новое значение в минутах или /cancel для отмены:",
         reply_markup=cancel_keyboard()
     )
@@ -188,20 +189,20 @@ async def save_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         minutes = int(update.message.text.strip())
         seconds = minutes * 60
     except ValueError:
-        await update.message.reply_text("❌ Неверный формат. Используйте число (минуты).")
+        await update.message.reply_text(f"{P.CROSS} Неверный формат. Используйте число (минуты).")
         return ENTERING_COOLDOWN
 
     if minutes <= 0:
-        await update.message.reply_text("❌ Кулдаун должен быть положительным числом.")
+        await update.message.reply_text(f"{P.CROSS} Кулдаун должен быть положительным числом.")
         return ENTERING_COOLDOWN
 
     if minutes > 1440:  # 24 hours
-        await update.message.reply_text("❌ Кулдаун не может быть больше 24 часов (1440 минут).")
+        await update.message.reply_text(f"{P.CROSS} Кулдаун не может быть больше 24 часов (1440 минут).")
         return ENTERING_COOLDOWN
 
     await _save_user_setting(update, cooldown_seconds=seconds)
     await update.message.reply_text(
-        f"✅ Кулдаун сохранён: {minutes} минут",
+        f"{P.CHECK} Кулдаун сохранён: {minutes} минут",
         reply_markup=settings_keyboard()
     )
     return ConversationHandler.END
@@ -218,19 +219,19 @@ async def filters_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with aiosqlite.connect(DB_PATH) as db:
         profile = await queries.get_freelancer_profile(db, OWNER_CHAT_ID)
 
-    text = "🔍 **Настройки фильтров**\n\n"
+    text = f"{P.SEARCH} **Настройки фильтров**\n\n"
     if profile:
         if profile.whitelist_words:
             whitelist_list = profile.whitelist_words_list
-            text += f"📜 Белый список: {', '.join(whitelist_list)}\n"
+            text += f"{P.SCROLL} Белый список: {', '.join(whitelist_list)}\n"
         if profile.blacklist_words:
             blacklist_list = profile.blacklist_words_list
-            text += f"🚫 Чёрный список: {', '.join(blacklist_list)}\n"
+            text += f"{P.BAN} Чёрный список: {', '.join(blacklist_list)}\n"
         if profile.min_customer_rating:
-            text += f"⭐ Мин. рейтинг: {profile.min_customer_rating}\n"
+            text += f"{P.STAR} Мин. рейтинг: {profile.min_customer_rating}\n"
         if profile.max_proposals_count:
-            text += f"📊 Макс. предложений: {profile.max_proposals_count}\n"
-        text += f"🤖 Авто-режим: {'✅' if profile.auto_mode_enabled else '❌'}"
+            text += f"{P.CHART} Макс. предложений: {profile.max_proposals_count}\n"
+        text += f"{P.ROBOT} Авто-режим: {'{P.CHECK}' if profile.auto_mode_enabled else '{P.CROSS}'}"
     else:
         text += "Фильтры не настроены."
 
@@ -251,7 +252,7 @@ async def settings_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE)
     current = profile.whitelist_words_list if profile and profile.whitelist_words else "Не установлен"
 
     await query.edit_message_text(
-        f"📜 Текущий белый список:\n\n{current}\n\n"
+        f"{P.SCROLL} Текущий белый список:\n\n{current}\n\n"
         "Введите слова через запятую (вакансия должна содержать хотя бы одно):\n"
         "Например: python, django, backend\n\n"
         "Или /cancel для отмены:",
@@ -282,7 +283,7 @@ async def settings_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE)
     current = profile.blacklist_words_list if profile and profile.blacklist_words else "Не установлен"
 
     await query.edit_message_text(
-        f"🚫 Текущий чёрный список:\n\n{current}\n\n"
+        f"{P.BAN} Текущий чёрный список:\n\n{current}\n\n"
         "Введите слова через запятую (вакансия будет отфильтрована, если содержит любое):\n"
         "Например: бесплатно, тестовое, стажировка\n\n"
         "Или /cancel для отмены:",
@@ -313,7 +314,7 @@ async def settings_min_rating(update: Update, context: ContextTypes.DEFAULT_TYPE
     current = profile.min_customer_rating if profile and profile.min_customer_rating else "Не установлен"
 
     await query.edit_message_text(
-        f"⭐ Текущий мин. рейтинг заказчика:\n\n{current}\n\n"
+        f"{P.STAR} Текущий мин. рейтинг заказчика:\n\n{current}\n\n"
         "Введите минимальный рейтинг (число, например 4.5):\n"
         "Или /cancel для отмены:",
         reply_markup=cancel_keyboard()
@@ -327,11 +328,11 @@ async def save_min_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         rating = float(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ Введите число. Например: 4.5")
+        await update.message.reply_text(f"{P.CROSS} Введите число. Например: 4.5")
         return ENTERING_MIN_RATING
 
     if rating < 0 or rating > 5:
-        await update.message.reply_text("❌ Рейтинг должен быть от 0 до 5.")
+        await update.message.reply_text(f"{P.CROSS} Рейтинг должен быть от 0 до 5.")
         return ENTERING_MIN_RATING
 
     await _save_profile_field(update, "min_customer_rating", rating)
@@ -352,7 +353,7 @@ async def settings_max_proposals(update: Update, context: ContextTypes.DEFAULT_T
     current = profile.max_proposals_count if profile and profile.max_proposals_count else "Не установлен"
 
     await query.edit_message_text(
-        f"📊 Текущий макс. предложений:\n\n{current}\n\n"
+        f"{P.CHART} Текущий макс. предложений:\n\n{current}\n\n"
         "Введите максимальное количество предложений (число):\n"
         "Или /cancel для отмены:",
         reply_markup=cancel_keyboard()
@@ -366,11 +367,11 @@ async def save_max_proposals(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         count = int(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ Введите число. Например: 20")
+        await update.message.reply_text(f"{P.CROSS} Введите число. Например: 20")
         return ENTERING_MAX_PROPOSALS
 
     if count <= 0:
-        await update.message.reply_text("❌ Количество должно быть положительным числом.")
+        await update.message.reply_text(f"{P.CROSS} Количество должно быть положительным числом.")
         return ENTERING_MAX_PROPOSALS
 
     await _save_profile_field(update, "max_proposals_count", count)
@@ -388,9 +389,9 @@ async def auto_mode_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     async with aiosqlite.connect(DB_PATH) as db:
         profile = await queries.get_freelancer_profile(db, OWNER_CHAT_ID)
 
-    text = "🤖 **Авто-режим**\n\n"
+    text = f"{P.ROBOT} **Авто-режим**\n\n"
     if profile:
-        status = "✅ Включен" if profile.auto_mode_enabled else "❌ Выключен"
+        status = f"{P.CHECK} Включен" if profile.auto_mode_enabled else f"{P.CROSS} Выключен"
         text += f"Статус: {status}\n"
         text += f"Задержка: {profile.auto_mode_delay_minutes} минут\n\n"
         text += (
@@ -409,7 +410,7 @@ async def auto_mode_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     await query.answer()
     await _save_profile_field(update, "auto_mode_enabled", True, silent=True)
-    await query.edit_message_text("✅ Авто-режим включён!", reply_markup=auto_mode_keyboard())
+    await query.edit_message_text(f"{P.CHECK} Авто-режим включён!", reply_markup=auto_mode_keyboard())
 
 
 @owner_only
@@ -418,7 +419,7 @@ async def auto_mode_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     await query.answer()
     await _save_profile_field(update, "auto_mode_enabled", False, silent=True)
-    await query.edit_message_text("❌ Авто-режим выключён.", reply_markup=auto_mode_keyboard())
+    await query.edit_message_text(f"{P.CROSS} Авто-режим выключён.", reply_markup=auto_mode_keyboard())
 
 
 @owner_only
@@ -433,7 +434,7 @@ async def settings_auto_delay(update: Update, context: ContextTypes.DEFAULT_TYPE
     current = profile.auto_mode_delay_minutes if profile else 5
 
     await query.edit_message_text(
-        f"⏱ Текущая задержка авто-режима: {current} минут\n\n"
+        f"{P.TIMER} Текущая задержка авто-режима: {current} минут\n\n"
         "Введите задержку в минутах (число):\n"
         "Или /cancel для отмены:",
         reply_markup=cancel_keyboard()
@@ -447,15 +448,15 @@ async def save_auto_delay(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         minutes = int(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ Введите число. Например: 5")
+        await update.message.reply_text(f"{P.CROSS} Введите число. Например: 5")
         return ENTERING_AUTO_DELAY
 
     if minutes <= 0:
-        await update.message.reply_text("❌ Задержка должна быть положительным числом.")
+        await update.message.reply_text(f"{P.CROSS} Задержка должна быть положительным числом.")
         return ENTERING_AUTO_DELAY
 
     if minutes > 1440:  # 24 hours
-        await update.message.reply_text("❌ Задержка не может быть больше 24 часов (1440 минут).")
+        await update.message.reply_text(f"{P.CROSS} Задержка не может быть больше 24 часов (1440 минут).")
         return ENTERING_AUTO_DELAY
 
     await _save_profile_field(update, "auto_mode_delay_minutes", minutes)
@@ -501,7 +502,7 @@ async def _save_user_setting(
         await queries.save_user_settings(db, settings)
 
     field_name = "Настройки сохранены"
-    await update.message.reply_text(f"✅ {field_name}!")
+    await update.message.reply_text(f"{P.CHECK} {field_name}!")
 
 
 async def _save_profile_field(
@@ -521,7 +522,7 @@ async def _save_profile_field(
         await queries.save_freelancer_profile(db, profile)
 
     if not silent:
-        await update.message.reply_text(f"✅ {field_name} сохранён!")
+        await update.message.reply_text(f"{P.CHECK} {field_name} сохранён!")
 
 
 @owner_only
@@ -530,12 +531,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=settings_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=settings_keyboard()
         )
     return ConversationHandler.END

@@ -13,7 +13,7 @@ from bot.handlers.v2.payments import (
     on_successful_payment,
     precheckout,
 )
-from core import billing
+from core import billing, tariffs
 from core.models import (
     Client,
     PaymentStatus,
@@ -32,15 +32,21 @@ from tests.unit.v2.conftest import make_context, make_update
 
 class TestPayloadAndPricing:
     def test_roundtrip_and_prices(self) -> None:
-        """Payload encodes tier+period; price always comes from §7 table."""
-        for tier, price in ((SubscriptionTier.BASIC, 299),
-                            (SubscriptionTier.PRO, 599),
-                            (SubscriptionTier.BUSINESS, 999)):
+        """Payload encodes tier+period; price always comes from the server."""
+        price = tariffs.PRIMARY_PRICE_RUB
+        assert price == 300  # single plan: 300 ₽/мес
+        for tier in billing.PURCHASABLE_TIERS:
             intent = billing.parse_payload(billing.build_payload(tier))
             assert intent.tier is tier
             assert intent.amount_rub == price
             assert intent.amount_kopecks == price * 100
             assert intent.days == billing.SUBSCRIPTION_DAYS
+
+    def test_default_payload_is_the_primary_plan(self) -> None:
+        """build_payload() with no args sells «Радар PRO»."""
+        intent = billing.parse_payload(billing.build_payload())
+        assert intent.tier is tariffs.PRIMARY_TIER
+        assert intent.amount_rub == tariffs.PRIMARY_PRICE_RUB
 
     def test_bad_payloads_rejected(self) -> None:
         """Foreign/malformed payloads never validate."""
@@ -52,11 +58,11 @@ class TestPayloadAndPricing:
     def test_amount_validation(self) -> None:
         """Client-reported totals are checked against the §7 price."""
         intent = billing.parse_payload(billing.build_payload(SubscriptionTier.PRO))
-        billing.validate_paid_amount(intent, 59900)  # ok
+        billing.validate_paid_amount(intent, 30000)  # ok: 300 ₽
         with pytest.raises(billing.PaymentError):
             billing.validate_paid_amount(intent, 100)  # underpaid
         with pytest.raises(billing.PaymentError):
-            billing.validate_paid_amount(intent, 99900)  # wrong tier price
+            billing.validate_paid_amount(intent, 99900)  # overpaid/stale price
 
 
 class TestApplyPaidSubscription:
@@ -173,7 +179,7 @@ class TestPaymentHandlers:
     async def test_buy_sends_invoice_with_spec_price(
         self, session_factory, user, monkeypatch
     ) -> None:
-        """Invoice carries the §7 price in kopecks and our payload."""
+        """Invoice carries the server-side price in kopecks and our payload."""
         from config import get_config
 
         monkeypatch.setattr(
@@ -186,11 +192,11 @@ class TestPaymentHandlers:
         kwargs = context.bot.send_invoice.await_args.kwargs
         assert kwargs["payload"] == "v2sub:business:30"
         assert kwargs["provider_token"] == "live-token"
-        assert kwargs["prices"][0].amount == 999 * 100
+        assert kwargs["prices"][0].amount == tariffs.PRIMARY_PRICE_RUB * 100
 
     async def test_precheckout_ok_and_reject(self, session_factory) -> None:
         """Valid order approved; foreign payload rejected within the flow."""
-        good = _precheckout_update("v2sub:pro:30", 59900)
+        good = _precheckout_update("v2sub:pro:30", 30000)
         await precheckout(good, make_context())  # type: ignore[arg-type]
         assert good.pre_checkout_query.answer.await_args.kwargs["ok"] is True
 
@@ -202,7 +208,7 @@ class TestPaymentHandlers:
         self, session_factory, user
     ) -> None:
         """The happy path: charge confirmed → tier active, receipt reply."""
-        update = _payment_update("v2sub:pro:30", 59900, "tg-ok-1")
+        update = _payment_update("v2sub:pro:30", 30000, "tg-ok-1")
         await on_successful_payment(update, make_context())  # type: ignore[arg-type]
         async with session_factory() as check:
             row = (
@@ -220,9 +226,9 @@ class TestPaymentHandlers:
         self, session_factory, user
     ) -> None:
         """Telegram re-delivers updates — the second one must be a no-op."""
-        first = _payment_update("v2sub:pro:30", 59900, "tg-dup-9")
+        first = _payment_update("v2sub:pro:30", 30000, "tg-dup-9")
         await on_successful_payment(first, make_context())  # type: ignore[arg-type]
-        second = _payment_update("v2sub:pro:30", 59900, "tg-dup-9")
+        second = _payment_update("v2sub:pro:30", 30000, "tg-dup-9")
         await on_successful_payment(second, make_context())  # type: ignore[arg-type]
         async with session_factory() as check:
             subs = (await check.execute(select(Subscription))).scalars().all()
@@ -234,7 +240,7 @@ class TestPaymentHandlers:
         self, session_factory, user
     ) -> None:
         """A charged-but-unrecognized order escalates, never auto-activates."""
-        update = _payment_update("v2sub:pro:999", 59900, "tg-weird-1")
+        update = _payment_update("v2sub:pro:999", 30000, "tg-weird-1")
         await on_successful_payment(update, make_context())  # type: ignore[arg-type]
         async with session_factory() as check:
             row = (

@@ -21,6 +21,7 @@ from db import queries
 from db.database import get_database
 from db.models import JobVacancy
 from config import DB_PATH, OWNER_CHAT_ID
+from emoji_config import E
 
 logger = get_logger(__name__)
 
@@ -111,7 +112,7 @@ async def check_and_notify_streaming(
         # Step 1: Fetch vacancies from all sources
         if progress_message:
             try:
-                await progress_message.edit_text("\U0001f504 Получаю вакансии...")
+                await progress_message.edit_text(f"{E.RELOAD} Получаю вакансии...")
             except (TelegramError, ValueError, TypeError):
                 pass
 
@@ -181,10 +182,10 @@ async def check_and_notify_streaming(
         if new_count == 0:
             summary = (
                 f"\u2705 **Проверка завершена**\n\n"
-                f"\U0001f4e6 Получено: {raw_count}\n"
-                f"\U0001f441 Уже видено: {seen_count}\n"
-                f"\U0001f6ab Отфильтровано: {filtered_count}\n"
-                f"\U0001f195 Новых: 0"
+                f"{E.PACKAGE} Получено: {raw_count}\n"
+                f"{E.EYE} Уже видено: {seen_count}\n"
+                f"{E.BAN} Отфильтровано: {filtered_count}\n"
+                f"{E.NEW} Новых: 0"
             )
             if progress_message:
                 await progress_message.edit_text(summary, parse_mode="Markdown")
@@ -304,7 +305,7 @@ async def check_and_notify_streaming(
                             try:
                                 import html as _html
                                 notify_text = (
-                                    f"\U0001f916 <b>Авто-ответ сгенерирован</b>\n\n"
+                                    f"{E.ROBOT} <b>Авто-ответ сгенерирован</b>\n\n"
                                     f"<b>{_html.escape(vacancy.title[:60])}</b>\n"
                                     f"Приоритет: {analysis.get('priority', 'medium')}\n\n"
                                     f"<pre>{_html.escape(response_text)}</pre>\n\n"
@@ -352,19 +353,19 @@ async def check_and_notify_streaming(
         # Step 5: Summary
         summary = (
             f"\u2705 **Проверка завершена**\n\n"
-            f"\U0001f4e6 Получено: {raw_count}\n"
-            f"\U0001f195 Новых: {new_count}\n"
-            f"\U0001f6ab Отфильтровано: {filtered_count + len(filtered_kwork_ids)}\n"
-            f"\U0001f514 Уведомлений отправлено: {analyzed_count}\n"
-            f"\U0001f534 High priority: {high_priority_count}"
+            f"{E.PACKAGE} Получено: {raw_count}\n"
+            f"{E.NEW} Новых: {new_count}\n"
+            f"{E.BAN} Отфильтровано: {filtered_count + len(filtered_kwork_ids)}\n"
+            f"{E.BELL} Уведомлений отправлено: {analyzed_count}\n"
+            f"{E.RED} High priority: {high_priority_count}"
         )
         if auto_mode_responses > 0:
-            summary += f"\n\U0001f916 Авто-ответы: {auto_mode_responses}"
+            summary += f"\n{E.ROBOT} Авто-ответы: {auto_mode_responses}"
 
         # Add cache stats
         cache_stats = get_ai_cache().get_stats()
         if cache_stats["size"] > 0:
-            summary += f"\n\U0001f4be AI кэш: {cache_stats['size']} записей"
+            summary += f"\n{E.DISK} AI кэш: {cache_stats['size']} записей"
 
         if progress_message:
             await progress_message.edit_text(summary, parse_mode="Markdown")
@@ -402,7 +403,7 @@ async def check_and_notify_streaming(
         try:
             await application.bot.send_message(
                 chat_id=OWNER_CHAT_ID,
-                text=f"\U0001f6a8 **Критическая ошибка**\n\n{str(e)[:200]}"
+                text=f"{E.SIREN} **Критическая ошибка**\n\n{str(e)[:200]}"
             )
         except (TelegramError, ValueError, TypeError):
             pass
@@ -420,7 +421,7 @@ async def check_monitor_health(application: Application) -> None:
         try:
             await application.bot.send_message(
                 chat_id=OWNER_CHAT_ID,
-                text=f"\U0001f6a8 **Мониторинг не работает**\n\nПоследняя проверка: {int(minutes_since)} минут назад.\nПроверьте /health"
+                text=f"{E.SIREN} **Мониторинг не работает**\n\nПоследняя проверка: {int(minutes_since)} минут назад.\nПроверьте /health"
             )
             logger.error("scheduler.health_alert", minutes_since=int(minutes_since))
         except (TelegramError, ValueError, TypeError):

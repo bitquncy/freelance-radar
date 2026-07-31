@@ -14,6 +14,15 @@ from core.models import (
     Reminder,
 )
 from core.scoring import TrafficLight
+from emoji_config import (
+    E,
+    P,
+    btn,
+    btn_danger,
+    btn_neutral,
+    btn_primary,
+    emoji,
+)
 
 SOURCE_TITLES = {
     "kwork": "Kwork",
@@ -23,16 +32,20 @@ SOURCE_TITLES = {
     "upwork": "Upwork",
 }
 
+#: Plain Unicode — годится и для подписей кнопок, и для alert-ов.
 STAGE_EMOJI = {
     PipelineStage.NEW_LEAD: "\U0001f195",
-    PipelineStage.PROPOSAL_SENT: "\U0001f4e8",
-    PipelineStage.NEGOTIATION: "\U0001f4ac",
-    PipelineStage.WON: "\U0001f3af",
-    PipelineStage.LOST: "❌",
+    PipelineStage.PROPOSAL_SENT: P.INBOX,
+    PipelineStage.NEGOTIATION: P.COMMENT,
+    PipelineStage.WON: P.TARGET,
+    PipelineStage.LOST: P.CROSS,
     PipelineStage.IN_PROGRESS: "\U0001f6e0",
-    PipelineStage.COMPLETED: "✅",
-    PipelineStage.REPEAT_CLIENT: "\U0001f501",
+    PipelineStage.COMPLETED: P.CHECK,
+    PipelineStage.REPEAT_CLIENT: P.REPEAT,
 }
+
+#: Те же иконки для HTML-текста карточек (premium, когда включён).
+STAGE_EMOJI_HTML = {stage: emoji(icon) for stage, icon in STAGE_EMOJI.items()}
 
 
 def _budget_line(project: Project) -> str:
@@ -49,15 +62,19 @@ def project_card(project: Project, analysis: Optional[ProjectAnalysis]) -> str:
     source = SOURCE_TITLES.get(project.source.value, project.source.value)
     lines = [
         f"<b>{esc(project.title)}</b>",
-        f"\U0001f4e1 {esc(source)} · \U0001f4b0 {esc(_budget_line(project))}",
+        f"{E.RADAR} {esc(source)} · {E.MONEY} {esc(_budget_line(project))}",
     ]
     if analysis is not None:
         if analysis.needs_manual_review:
-            lines.append("⚠️ <i>Требует ручной проверки (бюджет не определён)</i>")
+            lines.append(
+                f"{E.WARNING} <i>Требует ручной проверки "
+                "(бюджет не определён)</i>"
+            )
         else:
             if analysis.win_probability is not None:
                 lines.append(
-                    f"\U0001f3af Вероятность получить заказ: <b>{analysis.win_probability:.0f}%</b>"
+                    f"{E.TARGET} Вероятность получить заказ: "
+                    f"<b>{analysis.win_probability:.0f}%</b>"
                 )
             if analysis.profitability_index is not None:
                 light = TrafficLight.GREEN
@@ -66,7 +83,8 @@ def project_card(project: Project, analysis: Optional[ProjectAnalysis]) -> str:
                 elif analysis.profitability_index <= 1.2:
                     light = TrafficLight.YELLOW
                 lines.append(
-                    f"{light.emoji} Выгодность: <b>{analysis.profitability_index:.2f}</b>"
+                    f"{emoji(light.emoji)} Выгодность: "
+                    f"<b>{analysis.profitability_index:.2f}</b>"
                     f" (~{analysis.effective_hourly_rate:.0f} ₽/ч, "
                     f"чистыми ~{analysis.net_payout:.0f} ₽)"
                 )
@@ -74,7 +92,7 @@ def project_card(project: Project, analysis: Optional[ProjectAnalysis]) -> str:
             flags = ", ".join(esc(f) for f in analysis.client_red_flags[:3])
             lines.append(f"\U0001f6a9 Красные флаги: {flags}")
         if analysis.summary:
-            lines.append(f"\U0001f4dd {esc(analysis.summary[:200])}")
+            lines.append(f"{E.NOTE} {esc(analysis.summary[:200])}")
     # Only http(s) links: a scraped URL with an exotic scheme would make
     # Telegram reject the whole message (silent notification loss).
     if project.url and project.url.startswith(("http://", "https://")):
@@ -88,16 +106,17 @@ def project_card_keyboard(project_id: int) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    "✍️ Отклик", callback_data=f"v2p:gen:{project_id}"
+                    btn_primary("Отклик", P.WRITING),
+                    callback_data=f"v2p:gen:{project_id}",
                 ),
                 InlineKeyboardButton(
-                    "\U0001f9e9 Кейсы под заказ",
+                    f"{P.PUZZLE} Кейсы под заказ",
                     callback_data=f"v2p:cases:{project_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "\U0001f648 Скрыть", callback_data=f"v2p:hide:{project_id}"
+                    f"{P.HIDE} Скрыть", callback_data=f"v2p:hide:{project_id}"
                 )
             ],
         ]
@@ -119,7 +138,7 @@ def proposal_card(proposal: Proposal, project: Optional[Project] = None) -> str:
     lines.append(esc(proposal.generated_text))
     if proposal.violations:
         lines.append("")
-        lines.append("⚠️ <i>Проверьте перед отправкой:</i>")
+        lines.append(f"{E.WARNING} <i>Проверьте перед отправкой:</i>")
         for violation in proposal.violations[:5]:
             lines.append(f"• <i>{esc(violation)}</i>")
     return "\n".join(lines)
@@ -130,10 +149,12 @@ def proposal_keyboard(proposal_id: int, ai_enabled: bool) -> InlineKeyboardMarku
     rows = [
         [
             InlineKeyboardButton(
-                "\U0001f4e4 Отправлено", callback_data=f"v2p:send:{proposal_id}"
+                btn_primary("Отправлено", P.OUTBOX),
+                callback_data=f"v2p:send:{proposal_id}",
             ),
             InlineKeyboardButton(
-                "✏️ Редактировать", callback_data=f"v2p:edit:{proposal_id}"
+                f"{P.EDIT} Редактировать",
+                callback_data=f"v2p:edit:{proposal_id}",
             ),
         ]
     ]
@@ -141,7 +162,8 @@ def proposal_keyboard(proposal_id: int, ai_enabled: bool) -> InlineKeyboardMarku
         rows.append(
             [
                 InlineKeyboardButton(
-                    "\U0001f501 Ещё вариант", callback_data=f"v2p:regen:{proposal_id}"
+                    f"{P.REPEAT} Ещё вариант",
+                    callback_data=f"v2p:regen:{proposal_id}",
                 )
             ]
         )
@@ -151,7 +173,7 @@ def proposal_keyboard(proposal_id: int, ai_enabled: bool) -> InlineKeyboardMarku
 def reminder_card(client: Client, reminder: Reminder) -> str:
     """Render a follow-up reminder (§3.8)."""
     return (
-        f"⏰ <b>Напоминание</b>\n"
+        f"{E.ALARM} <b>Напоминание</b>\n"
         f"Клиент: {esc(client.name)}\n"
         f"Этап: {STAGE_TITLES[client.pipeline_stage]}\n\n"
         f"{esc(reminder.message)}"
@@ -164,11 +186,11 @@ def reminder_keyboard(reminder_id: int, client_id: int) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    "✍️ Написать сейчас",
+                    btn_primary("Написать сейчас", P.WRITING),
                     callback_data=f"v2r:write:{reminder_id}:{client_id}",
                 ),
                 InlineKeyboardButton(
-                    "⏳ Отложить на сутки",
+                    f"{P.HOURGLASS} Отложить на сутки",
                     callback_data=f"v2r:snooze:{reminder_id}",
                 ),
             ]
@@ -179,13 +201,13 @@ def reminder_keyboard(reminder_id: int, client_id: int) -> InlineKeyboardMarkup:
 def client_card(client: Client, interactions: List[str]) -> str:
     """Render a CRM client card (§3.7)."""
     lines = [
-        f"{STAGE_EMOJI[client.pipeline_stage]} <b>{esc(client.name)}</b>",
+        f"{STAGE_EMOJI_HTML[client.pipeline_stage]} <b>{esc(client.name)}</b>",
         f"Этап: <b>{STAGE_TITLES[client.pipeline_stage]}</b>",
     ]
     if client.last_contact_at is not None:
         lines.append(f"Последний контакт: {client.last_contact_at:%d.%m.%Y %H:%M}")
     if client.notes:
-        lines.append(f"\U0001f4dd Заметки: {esc(client.notes[:300])}")
+        lines.append(f"{E.NOTE} Заметки: {esc(client.notes[:300])}")
     if interactions:
         lines.append("")
         lines.append("<i>Последние события:</i>")
@@ -199,7 +221,10 @@ def client_keyboard(client: Client) -> InlineKeyboardMarkup:
     rows = []
     stage_row = [
         InlineKeyboardButton(
-            f"➡️ {STAGE_TITLES[stage]}",
+            # Проигранный клиент — красный маркер: действие закрывает сделку.
+            btn_danger(STAGE_TITLES[stage], STAGE_EMOJI[stage])
+            if stage is PipelineStage.LOST
+            else btn(STAGE_TITLES[stage], icon=STAGE_EMOJI[stage]),
             callback_data=f"v2c:stage:{client.id}:{stage.value}",
         )
         for stage in allowed_next_stages(client.pipeline_stage)
@@ -209,9 +234,11 @@ def client_keyboard(client: Client) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                "\U0001f4dd Заметка", callback_data=f"v2c:note:{client.id}"
+                f"{P.NOTE} Заметка", callback_data=f"v2c:note:{client.id}"
             ),
-            InlineKeyboardButton("⬅️ К списку", callback_data="v2c:list"),
+            InlineKeyboardButton(
+                btn_neutral("К списку", P.BACK), callback_data="v2c:list"
+            ),
         ]
     )
     return InlineKeyboardMarkup(rows)

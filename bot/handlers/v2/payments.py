@@ -23,24 +23,26 @@ from telegram.ext import (
 from bot.handlers.v2.common import TIER_TITLES, get_or_create_user
 from core import billing
 from core.db import get_session_factory
+from emoji_config import E, P
 from core.models import SubscriptionTier
 from services.logger_config import get_logger
 
 logger = get_logger(__name__)
 
+#: Single-plan description shown inside the Telegram invoice.
+PLAN_DESCRIPTION = (
+    "Все биржи и Telegram-каналы, безлимит анализов, AI-отклики с адаптацией "
+    "под портфолио, CRM с напоминаниями, недельный отчёт. Доступ на 30 дней, "
+    "без автосписаний."
+)
+
 TIER_DESCRIPTIONS = {
-    SubscriptionTier.BASIC: (
-        "1 биржа + до 5 TG-каналов, 50 анализов/мес, отклик по шаблону, "
-        "CRM до 15 клиентов"
-    ),
-    SubscriptionTier.PRO: (
-        "До 3 бирж + безлимит каналов и анализов, AI-отклики с адаптацией "
-        "портфолио, напоминания, недельный отчёт"
-    ),
-    SubscriptionTier.BUSINESS: (
-        "Безлимит источников, варианты тона, команда до 3 мест, экспорт, "
-        "приоритетное сканирование"
-    ),
+    tier: PLAN_DESCRIPTION
+    for tier in (
+        SubscriptionTier.BASIC,
+        SubscriptionTier.PRO,
+        SubscriptionTier.BUSINESS,
+    )
 }
 
 
@@ -60,8 +62,8 @@ async def buy_subscription(
     token = _provider_token()
     if not token:
         await query.answer(
-            "Оплата картой подключается — пока напишите владельцу, "
-            "тариф выдаётся вручную.",
+            f"{P.CLOCK} Оплата картой ещё подключается. Напишите владельцу бота — "
+            "доступ выдадут вручную в тот же день.",
             show_alert=True,
         )
         return
@@ -69,7 +71,7 @@ async def buy_subscription(
         tier = SubscriptionTier(query.data.split(":")[2])
         intent = billing.parse_payload(billing.build_payload(tier))
     except (ValueError, billing.PaymentError):
-        await query.answer("Неизвестный тариф.", show_alert=True)
+        await query.answer(f"{P.CROSS} Неизвестный тариф.", show_alert=True)
         return
     await query.answer()
     from config import get_config
@@ -112,7 +114,7 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await pcq.answer(
             ok=False,
             error_message=(
-                "Не удалось проверить заказ — попробуйте открыть оплату заново."
+                f"{P.WARNING} Не удалось проверить заказ — попробуйте открыть оплату заново."
             ),
         )
         return
@@ -144,7 +146,7 @@ async def on_successful_payment(
             telegram_id=update.effective_user.id,
         )
         await message.reply_text(
-            "Платёж получен, но заказ не распознан — напишите владельцу, "
+            f"{P.WARNING} Платёж получен, но заказ не распознан — напишите владельцу, "
             "подписку активируют вручную."
         )
         return
@@ -162,12 +164,16 @@ async def on_successful_payment(
         expires = user.subscription_expires_at
 
     if not applied:
-        await message.reply_text("Этот платёж уже был учтён — всё в порядке.")
+        await message.reply_text(
+            f"{P.INFO} Этот платёж уже был учтён — доступ активен, повторно не списали."
+        )
         return
     await message.reply_text(
-        f"Оплата прошла ✅ Тариф {TIER_TITLES[intent.tier]} активен"
-        + (f" до {expires:%d.%m.%Y}." if expires else ".")
-        + " Спасибо, что поддерживаете радар!"
+        f"{E.CHECK} <b>Оплата прошла</b>\n\n"
+        f"{TIER_TITLES[intent.tier]} активен"
+        + (f" до <b>{expires:%d.%m.%Y}</b>" if expires else "")
+        + ".\nРадар снова сканирует заказы — вернуться в меню: /menu",
+        parse_mode="HTML",
     )
 
 

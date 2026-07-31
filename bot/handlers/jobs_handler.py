@@ -16,6 +16,7 @@ from services.response_generator import ResponseGenerator
 from services.sender import SenderService
 from services.formatters import format_vacancy_full
 from config import DB_PATH, OWNER_CHAT_ID
+from emoji_config import E, P
 
 logger = get_logger(__name__)
 
@@ -48,8 +49,8 @@ async def jobs_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, page: in
         stats = await queries.get_vacancy_stats(db)
 
     if not all_vacancies:
-        text = "📋 Новых вакансий нет.\n\n"
-        text += "📊 Статистика:\n"
+        text = f"{E.LIST} Новых вакансий нет.\n\n"
+        text += f"{E.CHART} Статистика:\n"
         text += f"Всего: {stats.get('total', 0)}\n"
         text += f"Просмотрено: {stats.get('total', 0) - stats.get('unseen', 0)}\n"
         text += f"Откликнуто: {stats.get('responded', 0)}\n"
@@ -63,8 +64,8 @@ async def jobs_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, page: in
     start_idx = (page - 1) * VACANCIES_PER_PAGE
     page_vacancies = all_vacancies[start_idx:start_idx + VACANCIES_PER_PAGE]
 
-    text = f"📋 Найдено новых вакансий: {len(all_vacancies)}\n"
-    text += f"📄 Страница {page}/{total_pages}"
+    text = f"{E.LIST} Найдено новых вакансий: {len(all_vacancies)}\n"
+    text += f"{E.DOC} Страница {page}/{total_pages}"
 
     await update.message.reply_text(
         text,
@@ -132,9 +133,9 @@ async def vacancy_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await show_vacancy(update, context, vacancies[0].kwork_id)
     else:
         try:
-            await query.edit_message_text("✅ Все вакансии просмотрены!")
+            await query.edit_message_text(f"{E.CHECK} Все вакансии просмотрены!")
         except (TelegramError, ValueError, TypeError):
-            await query.answer("✅ Все вакансии просмотрены!", show_alert=True)
+            await query.answer(f"{P.CHECK} Все вакансии просмотрены!", show_alert=True)
 
 
 @owner_only
@@ -170,7 +171,7 @@ async def vacancy_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if vacancies:
         await show_vacancy(update, context, vacancies[0].kwork_id)
     else:
-        await query.edit_message_text("🚫 Добавлено в чёрный список. Все вакансии просмотрены!")
+        await query.edit_message_text(f"{E.BAN} Добавлено в чёрный список. Все вакансии просмотрены!")
 
 
 @owner_only
@@ -199,7 +200,7 @@ async def vacancy_generate_response(update: Update, context: ContextTypes.DEFAUL
     async with aiosqlite.connect(DB_PATH) as db:
         vacancy = await queries.get_vacancy_by_kwork_id(db, kwork_id)
         if not vacancy:
-            await query.edit_message_text("❌ Вакансия не найдена")
+            await query.edit_message_text(f"{E.CROSS} Вакансия не найдена")
             return
 
         await queries.mark_vacancy_analyzed(db, kwork_id)
@@ -222,7 +223,7 @@ async def vacancy_generate_response(update: Update, context: ContextTypes.DEFAUL
     )
 
     if not response_text:
-        await query.edit_message_text("❌ Не удалось сгенерировать отклик")
+        await query.edit_message_text(f"{E.CROSS} Не удалось сгенерировать отклик")
         return
 
     # Save response to database
@@ -239,9 +240,9 @@ async def vacancy_generate_response(update: Update, context: ContextTypes.DEFAUL
     async with aiosqlite.connect(DB_PATH) as db:
         response_id = await queries.save_response(db, response)
 
-    text = "💬 <b>Отклик готов</b>\n\n"
-    text += f'🔗 <a href="{vacancy.url}">Открыть заказ</a>\n'
-    text += f"🆔 ID: <code>{kwork_id}</code>\n\n"
+    text = f"{E.COMMENT} <b>Отклик готов</b>\n\n"
+    text += f'{E.LINK} <a href="{vacancy.url}">Открыть заказ</a>\n'
+    text += f"{E.ID} ID: <code>{kwork_id}</code>\n\n"
     text += "Выберите действие:"
 
     await query.edit_message_text(
@@ -271,7 +272,7 @@ async def response_copy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await query.answer()
 
     import html as _html
-    text = f"📝 <b>Скопируйте и вставьте на бирже:</b>\n\n<pre>{_html.escape(response.response_text)}</pre>"
+    text = f"{E.NOTE} <b>Скопируйте и вставьте на бирже:</b>\n\n<pre>{_html.escape(response.response_text)}</pre>"
     await query.message.reply_text(text, parse_mode="HTML")
 
 
@@ -294,7 +295,7 @@ async def response_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         vacancy = await queries.get_vacancy_by_kwork_id(db, response.kwork_id)
 
     if not vacancy:
-        await query.edit_message_text("❌ Вакансия не найдена")
+        await query.edit_message_text(f"{E.CROSS} Вакансия не найдена")
         return
 
     await query.answer()
@@ -310,15 +311,15 @@ async def response_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     await queries.approve_response(db, response_id)
                     await queries.mark_response_sent(db, response_id)
                     await queries.mark_vacancy_responded(db, response.kwork_id)
-                await query.edit_message_text("✅ Отклик отправлен!")
+                await query.edit_message_text(f"{E.CHECK} Отклик отправлен!")
             else:
-                await query.edit_message_text("❌ Не удалось отправить (кулдаун или ошибка)")
+                await query.edit_message_text(f"{E.CROSS} Не удалось отправить (кулдаун или ошибка)")
         finally:
             await sender.cleanup()
     else:
         # For Kwork, just show the text
         import html as _html
-        text = f"📝 <b>Отклик для Kwork:</b>\n\n<pre>{_html.escape(response.response_text)}</pre>\n\n"
+        text = f"{E.NOTE} <b>Отклик для Kwork:</b>\n\n<pre>{_html.escape(response.response_text)}</pre>\n\n"
         text += "Скопируйте и вставьте на бирже вручную."
         await query.edit_message_text(text, parse_mode="HTML")
 
@@ -347,7 +348,7 @@ async def response_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await query.answer()
 
     import html as _html
-    text = f"✏️ <b>Отредактируйте текст и отправьте:</b>\n\n<pre>{_html.escape(response.response_text)}</pre>"
+    text = f"{E.EDIT} <b>Отредактируйте текст и отправьте:</b>\n\n<pre>{_html.escape(response.response_text)}</pre>"
     await query.message.reply_text(text, parse_mode="HTML")
 
 
@@ -360,14 +361,14 @@ async def vacancy_defer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not kwork_id:
         await query.answer("Ошибка данных", show_alert=True)
         return
-    await query.answer("⏳ Отложено на 30 мин")
+    await query.answer(f"{E.HOURGLASS} Отложено на 30 мин")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await queries.mark_vacancy_analyzed(db, kwork_id)
 
     await query.edit_message_text(
-        "⏳ Вакансия отложена на 30 минут.\n\n"
-        "Вы можете вернуться к ней через меню 📋 Вакансии."
+        f"{E.HOURGLASS} Вакансия отложена на 30 минут.\n\n"
+        f"Вы можете вернуться к ней через меню {E.LIST} Вакансии."
     )
 
 
@@ -380,14 +381,14 @@ async def response_defer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if response_id is None:
         await query.answer("Ошибка данных", show_alert=True)
         return
-    await query.answer("⏳ Отложено")
+    await query.answer(f"{E.HOURGLASS} Отложено")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await queries.approve_response(db, response_id)
 
     await query.edit_message_text(
-        "⏳ Отклик отложен.\n\n"
-        "Вы можете вернуться к нему через меню 📋 Вакансии → Отложенные."
+        f"{E.HOURGLASS} Отклик отложен.\n\n"
+        f"Вы можете вернуться к нему через меню {E.LIST} Вакансии → Отложенные."
     )
 
 
@@ -405,7 +406,7 @@ async def response_mark_sent(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await queries.mark_vacancy_analyzed(db, kwork_id)
         await queries.mark_vacancy_responded(db, kwork_id)
 
-    await query.answer("✅ Пометил как откликнутую", show_alert=True)
+    await query.answer(f"{P.CHECK} Пометил как откликнутую", show_alert=True)
 
 
 @owner_only
@@ -414,7 +415,7 @@ async def response_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
 
-    await query.edit_message_text("❌ Отклик отменён.")
+    await query.edit_message_text(f"{E.CROSS} Отклик отменён.")
 
 
 @owner_only
@@ -430,7 +431,7 @@ async def vacancy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with aiosqlite.connect(DB_PATH) as db:
         vacancy = await queries.get_vacancy_by_kwork_id(db, kwork_id)
         if not vacancy:
-            await query.edit_message_text("❌ Вакансия не найдена")
+            await query.edit_message_text(f"{E.CROSS} Вакансия не найдена")
             return
 
         await queries.mark_vacancy_analyzed(db, kwork_id)
@@ -452,13 +453,13 @@ async def vacancy_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
     if not response_text:
-        await query.edit_message_text("❌ Не удалось сгенерировать отклик")
+        await query.edit_message_text(f"{E.CROSS} Не удалось сгенерировать отклик")
         return
 
     import html as _html
-    text = "🚀 <b>Отклик для Kwork</b>\n\n"
+    text = f"{E.ROCKET} <b>Отклик для Kwork</b>\n\n"
     text += f'<pre>{_html.escape(response_text)}</pre>\n\n'
-    text += f'🔗 <a href="{vacancy.url}">Открыть заказ</a>\n'
+    text += f'{E.LINK} <a href="{vacancy.url}">Открыть заказ</a>\n'
     text += "Скопируйте и вставьте на бирже вручную."
 
     await query.edit_message_text(text, parse_mode="HTML")
@@ -493,7 +494,7 @@ async def show_vacancy_list(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         all_vacancies = await queries.get_unseen_vacancies(db, limit=100)
 
     if not all_vacancies:
-        await update.callback_query.edit_message_text("📋 Новых вакансий нет.")
+        await update.callback_query.edit_message_text(f"{E.LIST} Новых вакансий нет.")
         return
 
     total_pages = max(1, (len(all_vacancies) + VACANCIES_PER_PAGE - 1) // VACANCIES_PER_PAGE)
@@ -501,8 +502,8 @@ async def show_vacancy_list(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     start_idx = (page - 1) * VACANCIES_PER_PAGE
     page_vacancies = all_vacancies[start_idx:start_idx + VACANCIES_PER_PAGE]
 
-    text = f"📋 Найдено новых вакансий: {len(all_vacancies)}\n"
-    text += f"📄 Страница {page}/{total_pages}"
+    text = f"{E.LIST} Найдено новых вакансий: {len(all_vacancies)}\n"
+    text += f"{E.DOC} Страница {page}/{total_pages}"
 
     await update.callback_query.edit_message_text(
         text,

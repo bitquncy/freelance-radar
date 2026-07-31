@@ -13,8 +13,8 @@ def _user(tier: SubscriptionTier, expires_in_days: int = 10) -> User:
     )
 
 
-def test_basic_limits_match_spec_table() -> None:
-    """§7: Basic — 1 биржа, 5 каналов, 50 анализов, CRM 15, без AI/напоминаний."""
+def test_basic_limits_are_the_legacy_capped_plan() -> None:
+    """Legacy BASIC rows keep their old caps (no longer sold)."""
     limits = tariffs.get_limits(SubscriptionTier.BASIC)
     assert limits is not None
     assert limits.max_exchanges == 1
@@ -26,12 +26,16 @@ def test_basic_limits_match_spec_table() -> None:
     assert limits.auto_send is False
 
 
-def test_pro_limits_match_spec_table() -> None:
-    """§7: Pro — до 3 бирж, безлимит каналов/анализов/CRM, AI, напоминания."""
+def test_pro_is_the_single_unlimited_plan() -> None:
+    """«Радар PRO» (300 ₽/мес): everything on, nothing capped."""
     limits = tariffs.get_limits(SubscriptionTier.PRO)
     assert limits is not None
-    assert limits.max_exchanges == 3
+    assert limits.max_exchanges is None
     assert limits.max_tg_channels is None
+    assert limits.tone_variants == 3
+    assert limits.export_integrations is True
+    assert limits.priority_scan is True
+    assert limits.personal_scoring is True
     assert limits.analyses_per_month is None
     assert limits.max_active_clients is None
     assert limits.ai_generation is True
@@ -51,13 +55,33 @@ def test_business_limits_match_spec_table() -> None:
     assert limits.personal_scoring is True
 
 
-def test_prices_match_spec() -> None:
-    """§7: 299 / 599 / 999 ₽, годовая −20%, триал 7 дней."""
-    assert tariffs.PRICES_RUB[SubscriptionTier.BASIC] == 299
-    assert tariffs.PRICES_RUB[SubscriptionTier.PRO] == 599
-    assert tariffs.PRICES_RUB[SubscriptionTier.BUSINESS] == 999
-    assert tariffs.ANNUAL_DISCOUNT == 0.20
+def test_single_price_300_and_trial_7_days() -> None:
+    """Owner decision: one plan at 300 ₽/мес + 7-day free trial."""
+    assert tariffs.PRIMARY_PRICE_RUB == 300
+    assert tariffs.PRIMARY_TIER is SubscriptionTier.PRO
     assert tariffs.TRIAL_DAYS == 7
+    # Every purchasable tier resolves to the same single price.
+    for tier in (SubscriptionTier.BASIC, SubscriptionTier.PRO,
+                 SubscriptionTier.BUSINESS):
+        assert tariffs.PRICES_RUB[tier] == 300
+
+
+def test_days_left_and_is_trial() -> None:
+    """Countdown rounds up; a live trial is detected as such."""
+    trial = _user(SubscriptionTier.TRIAL, expires_in_days=7)
+    assert tariffs.days_left(trial) == 7
+    assert tariffs.is_trial(trial) is True
+
+    almost = _user(SubscriptionTier.PRO, expires_in_days=0)
+    almost.subscription_expires_at = utcnow() + timedelta(hours=3)
+    assert tariffs.days_left(almost) == 1  # partial day never shows as 0
+    assert tariffs.is_trial(almost) is False
+
+    dead = _user(SubscriptionTier.PRO, expires_in_days=-1)
+    assert tariffs.days_left(dead) == 0
+
+    forever = User(telegram_id=9, subscription_tier=SubscriptionTier.PRO)
+    assert tariffs.days_left(forever) is None
 
 
 def test_trial_gets_pro_level_access() -> None:
@@ -96,8 +120,8 @@ def test_connection_gates() -> None:
     """Exchange and channel limits per tier."""
     assert tariffs.can_connect_exchange(SubscriptionTier.BASIC, 0) is True
     assert tariffs.can_connect_exchange(SubscriptionTier.BASIC, 1) is False
-    assert tariffs.can_connect_exchange(SubscriptionTier.PRO, 2) is True
-    assert tariffs.can_connect_exchange(SubscriptionTier.PRO, 3) is False
+    assert tariffs.can_connect_exchange(SubscriptionTier.PRO, 3) is True
+    assert tariffs.can_connect_exchange(SubscriptionTier.PRO, 99) is True
     assert tariffs.can_connect_tg_channel(SubscriptionTier.BASIC, 4) is True
     assert tariffs.can_connect_tg_channel(SubscriptionTier.BASIC, 5) is False
     assert tariffs.can_connect_tg_channel(SubscriptionTier.PRO, 500) is True

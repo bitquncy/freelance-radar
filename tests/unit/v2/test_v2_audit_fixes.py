@@ -548,9 +548,14 @@ class TestStartupSequence:
             # The caller's loop must still be the current one...
             assert asyncio.get_event_loop() is loop
             # ...and the scheduler must be able to bind to it (main.py:254).
-            scheduler = AsyncIOScheduler()
-            scheduler.start(paused=True)
-            scheduler.shutdown(wait=False)
+            # APScheduler.start() needs asyncio.get_running_loop(), so wrap
+            # the check in loop.run_until_complete to create a running context.
+            async def _check_scheduler() -> None:
+                scheduler = AsyncIOScheduler()
+                scheduler.start(paused=True)
+                scheduler.shutdown(wait=False)
+
+            loop.run_until_complete(_check_scheduler())
         finally:
             asyncio.set_event_loop(None)
             loop.close()

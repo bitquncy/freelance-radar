@@ -31,7 +31,7 @@ FreelanceRadar — это персональный Telegram-бот, которы
 - Ollama fallback
 - Playwright (парсинг Kwork)
 - Telethon (парсинг Telegram)
-- SQLite (aiosqlite) + FTS5 (полноценный поиск)
+- PostgreSQL в production, SQLite для локальной разработки и тестов
 - APScheduler (планировщик задач)
 - structlog (структурированное логирование)
 - tenacity (retry логика)
@@ -80,7 +80,7 @@ FreelanceRadar — это персональный Telegram-бот, которы
 - AI Cache — LRU кэш с TTL 24ч для OpenAI ответов
 - Batch анализ — параллельный анализ вакансий (max 5 concurrent)
 - Batch DB операции — bulk insert/update через executemany
-- Database connection pooling — WAL mode, shared connections
+- PostgreSQL-first в production, SQLite-only для локальной разработки
 
 ### Мониторинг и трассировка
 - Метрики Prometheus — Counter, Gauge, Histogram, Timer
@@ -94,11 +94,12 @@ FreelanceRadar — это персональный Telegram-бот, которы
 - AuthMiddleware — middleware для авторизации в python-telegram-bot
 - Event-driven — публикация событий на каждом этапе pipeline
 - Метрики из событий — автоматический сбор метрик через middleware
+- Production runtime: PostgreSQL, Alembic migrations, one bot replica with local FSM storage
 
 ### Безопасность
-- Auth middleware: `@owner_only` на всех обработчиках
+- Auth middleware: `@owner_only` на всех владельческих обработчиках
 - Blacklist с TTL (expires_at)
-- Уникальный constraint `UNIQUE(entity_type, entity_id, user_id)`
+- Уникальные constraints для ключевых сущностей и идемпотентных операций
 - Graceful shutdown при SIGTERM/SIGINT
 - Конкретные типы ошибок вместо `except Exception`
 
@@ -192,12 +193,15 @@ FreelanceRadar — это персональный Telegram-бот, которы
 - **OpenRouter API Key** (рекомендуется, дешевле) — получить на [openrouter.ai](https://openrouter.ai/keys)
   - **ИЛИ** OpenAI API Key — получить на [platform.openai.com](https://platform.openai.com)
 - Telegram API ID и Hash (получить на [my.telegram.org](https://my.telegram.org)) — опционально
+- PostgreSQL для production
 
 ---
 
 ## Установка
 
 ### Локальная установка
+
+Локально можно использовать SQLite, но production требует PostgreSQL.
 
 1. Клонируйте репозиторий:
 ```bash
@@ -246,6 +250,8 @@ python main.py
 ---
 
 ## Docker-деплой
+
+См. также `docs/PRODUCTION_OPERATIONS.md` для production-first деплоя, backup/restore и retention.
 
 ### Требования
 

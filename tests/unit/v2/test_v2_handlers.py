@@ -295,12 +295,15 @@ class TestProposalFlow:
 
 class TestSubscription:
     async def test_info_renders_usage(self, session_factory, user) -> None:
-        """/subscription shows tier + quota lines."""
+        """/subscription shows status, quota lines and the single price."""
         update = make_update(text="/subscription")
         await subscription_info(update, make_context())
         text = update.message.reply_text.await_args.args[0]
-        assert "Подписка" in text
-        assert "299" in text and "599" in text and "999" in text
+        assert "Статус" in text and "Анализов за месяц" in text
+        assert "300 ₽" in text
+        assert "7 дней" in text  # free trial is advertised
+        # Old multi-tier prices must be gone from the UI.
+        assert "299" not in text and "599" not in text and "999" not in text
 
     async def test_grant_by_owner(self, session_factory, user) -> None:
         """/grant switches the tier and records a Subscription row."""
@@ -315,7 +318,7 @@ class TestSubscription:
             ).scalar_one()
         assert row.subscription_tier is SubscriptionTier.PRO
         reply = update.message.reply_text.await_args.args[0]
-        assert "Pro" in reply
+        assert "Радар PRO" in reply
 
     async def test_grant_denied_for_non_owner(
         self, session_factory, user

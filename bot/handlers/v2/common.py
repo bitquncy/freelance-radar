@@ -5,22 +5,81 @@ from typing import Any, MutableMapping, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram import User as TelegramUser
 from telegram.ext import ContextTypes
 
 from core import tariffs
 from core.models import SubscriptionTier, User
+from emoji_config import E, P, btn_neutral, btn_primary
 
 TIER_TITLES = {
     SubscriptionTier.TRIAL: "Пробный период",
-    SubscriptionTier.BASIC: "Basic",
-    SubscriptionTier.PRO: "Pro",
-    SubscriptionTier.BUSINESS: "Business",
+    SubscriptionTier.BASIC: "Радар PRO",
+    SubscriptionTier.PRO: "Радар PRO",
+    SubscriptionTier.BUSINESS: "Радар PRO",
 }
 
+#: Shown in callback alerts (Telegram caps these at ~200 chars).
+#: Plain Unicode only — ``show_alert`` не парсит HTML, тег <tg-emoji>
+#: протёк бы пользователю как сырой текст.
 NO_ACCESS_TEXT = (
-    "Подписка не активна. Откройте /subscription, чтобы продлить доступ."
+    f"{P.LOCK} Доступ приостановлен. Подключите Радар PRO за "
+    f"{tariffs.PRIMARY_PRICE_RUB} ₽/мес — команда /subscription. Данные и CRM сохранены."
 )
+
+
+def paywall_text() -> str:
+    """Full paywall message for chat replies (HTML — premium-эмодзи ок)."""
+    return (
+        f"{E.LOCK} <b>Доступ приостановлен</b>\n\n"
+        "Сканирование бирж, анализ заказов и AI-отклики выключены, но "
+        "портфолио, CRM и история откликов целы.\n\n"
+        f"Вернуть всё — {tariffs.PRIMARY_PRICE_RUB} ₽/мес, отмена в любой момент."
+    )
+
+
+def paywall_keyboard() -> InlineKeyboardMarkup:
+    """Single-action paywall keyboard: pay now, or read what's included."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    btn_primary(
+                        f"Подключить за {tariffs.PRIMARY_PRICE_RUB} ₽/мес", P.CARD
+                    ),
+                    callback_data=f"v2sub:buy:{tariffs.PRIMARY_TIER.value}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    btn_neutral("Что входит", P.INFO), callback_data="v2sub:info"
+                )
+            ],
+        ]
+    )
+
+
+async def deny_no_access(update: object) -> None:
+    """Answer a blocked interaction with the paywall (callback or message).
+
+    Callback alerts are short by protocol, so the alert carries the short
+    text and the chat gets the full card with a pay button.
+    """
+    query = getattr(update, "callback_query", None)
+    message = getattr(update, "message", None)
+    if query is not None:
+        await query.answer(NO_ACCESS_TEXT, show_alert=True)
+        chat = getattr(query, "message", None)
+        if chat is not None:
+            await chat.reply_text(
+                paywall_text(), parse_mode="HTML", reply_markup=paywall_keyboard()
+            )
+        return
+    if message is not None:
+        await message.reply_text(
+            paywall_text(), parse_mode="HTML", reply_markup=paywall_keyboard()
+        )
 
 
 def esc(value: object) -> str:

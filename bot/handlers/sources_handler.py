@@ -9,6 +9,7 @@ from bot.keyboards import sources_keyboard, source_type_keyboard, cancel_keyboar
 from db import queries
 from db.models import Source
 from config import DB_PATH
+from emoji_config import P
 
 logger = get_logger(__name__)
 
@@ -20,7 +21,7 @@ SELECTING_SOURCE_TYPE, ENTERING_SOURCE_NAME, ENTERING_SOURCE_URL = range(3)
 async def sources_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show sources management menu."""
     await update.message.reply_text(
-        "📡 Управление источниками вакансий",
+        f"{P.RADAR} Управление источниками вакансий",
         reply_markup=sources_keyboard()
     )
 
@@ -36,14 +37,14 @@ async def list_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not sources:
         await query.edit_message_text(
-            "📋 Источники не настроены.\n\nДобавьте первый источник для мониторинга.",
+            f"{P.LIST} Источники не настроены.\n\nДобавьте первый источник для мониторинга.",
             reply_markup=sources_keyboard()
         )
         return
 
-    text = "📋 Список источников:\n\n"
+    text = f"{P.LIST} Список источников:\n\n"
     for source in sources:
-        status = "✅" if source.enabled else "⏸"
+        status = f"{P.CHECK}" if source.enabled else f"{P.PAUSE}"
         text += f"{status} {source.name} ({source.source_type})\n"
         if source.urls_list:
             text += f"   Каналы ({len(source.urls_list)}):\n"
@@ -148,7 +149,7 @@ async def save_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         source_id = await queries.add_source(db, source)
 
     await update.message.reply_text(
-        f"✅ Источник '{source_name}' успешно добавлен!\n\nID: {source_id}",
+        f"{P.CHECK} Источник '{source_name}' успешно добавлен!\n\nID: {source_id}",
         reply_markup=sources_keyboard()
     )
 
@@ -172,7 +173,7 @@ async def toggle_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await queries.toggle_source(db, source_id)
 
     await query.edit_message_text(
-        "✅ Статус источника изменён.",
+        f"{P.CHECK} Статус источника изменён.",
         reply_markup=sources_keyboard()
     )
 
@@ -193,7 +194,7 @@ async def delete_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await queries.delete_source(db, source_id)
 
     await query.edit_message_text(
-        "🗑 Источник удалён.",
+        f"{P.TRASH} Источник удалён.",
         reply_markup=sources_keyboard()
     )
 
@@ -204,12 +205,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if query:
         await query.answer()
         await query.edit_message_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=sources_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=sources_keyboard()
         )
 

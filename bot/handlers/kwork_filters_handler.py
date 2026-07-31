@@ -9,6 +9,7 @@ from bot.keyboards import kwork_filters_keyboard, ai_friendly_filter_keyboard, c
 from db import queries
 from db.models import FreelancerProfile
 from config import DB_PATH, OWNER_CHAT_ID
+from emoji_config import P
 
 logger = get_logger(__name__)
 
@@ -23,13 +24,13 @@ async def kwork_filters_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
 
     await query.edit_message_text(
-        "🔍 **Фильтры для Kwork**\n\n"
+        f"{P.SEARCH} **Фильтры для Kwork**\n\n"
         "Выберите фильтр для настройки:\n\n"
-        "🤖 AI-дружественные заказы — заказы, которые можно выполнить с помощью ИИ\n"
-        "💼 Простые задачи — заказы с минимальными требованиями\n"
-        "📊 Фильтр по бюджету — настройка диапазона бюджета\n"
-        "⏱ Фильтр по срокам — настройка сроков выполнения\n"
-        "🏷 Фильтр по навыкам — фильтрация по необходимым навыкам",
+        f"{P.ROBOT} AI-дружественные заказы — заказы, которые можно выполнить с помощью ИИ\n"
+        f"{P.BRIEFCASE} Простые задачи — заказы с минимальными требованиями\n"
+        f"{P.CHART} Фильтр по бюджету — настройка диапазона бюджета\n"
+        f"{P.TIMER} Фильтр по срокам — настройка сроков выполнения\n"
+        f"{P.LABEL} Фильтр по навыкам — фильтрация по необходимым навыкам",
         reply_markup=kwork_filters_keyboard(),
         parse_mode=None
     )
@@ -44,16 +45,16 @@ async def ai_friendly_filter_menu(update: Update, context: ContextTypes.DEFAULT_
     async with aiosqlite.connect(DB_PATH) as db:
         profile = await queries.get_freelancer_profile(db, OWNER_CHAT_ID)
 
-    text = "🤖 **AI-дружественные заказы**\n\n"
+    text = f"{P.ROBOT} **AI-дружественные заказы**\n\n"
     text += "Эти фильтры помогут найти заказы, которые можно выполнить с помощью ИИ:\n\n"
-    text += "• 🎯 **ИИ-генерация** — тексты, статьи, контент\n"
-    text += "• 🎯 **Вайб-кодинг** — генерация кода, отладка\n"
-    text += "• 🎯 **Авто-тестирование** — написание тестов\n"
-    text += "• 🎯 **Дизайн** — генерация изображений, макетов\n"
-    text += "• 🎯 **Анализ данных** — парсинг, обработка\n\n"
+    text += f"• {P.TARGET} **ИИ-генерация** — тексты, статьи, контент\n"
+    text += f"• {P.TARGET} **Вайб-кодинг** — генерация кода, отладка\n"
+    text += f"• {P.TARGET} **Авто-тестирование** — написание тестов\n"
+    text += f"• {P.TARGET} **Дизайн** — генерация изображений, макетов\n"
+    text += f"• {P.TARGET} **Анализ данных** — парсинг, обработка\n\n"
 
     if profile and hasattr(profile, 'ai_friendly_enabled'):
-        text += f"Текущий статус: {'✅ Включен' if profile.ai_friendly_enabled else '❌ Выключен'}\n"
+        text += f"Текущий статус: {'{P.CHECK} Включен' if profile.ai_friendly_enabled else '{P.CROSS} Выключен'}\n"
 
     await query.edit_message_text(text, reply_markup=ai_friendly_filter_keyboard(), parse_mode=None)
 
@@ -71,7 +72,7 @@ async def enable_ai_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await queries.save_freelancer_profile(db, profile)
 
     await query.edit_message_text(
-        "✅ AI-фильтр включён!\n\n"
+        f"{P.CHECK} AI-фильтр включён!\n\n"
         "Теперь бот будет искать заказы, которые можно выполнить с помощью ИИ.",
         reply_markup=ai_friendly_filter_keyboard()
     )
@@ -90,7 +91,7 @@ async def disable_ai_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await queries.save_freelancer_profile(db, profile)
 
     await query.edit_message_text(
-        "❌ AI-фильтр выключен.",
+        f"{P.CROSS} AI-фильтр выключен.",
         reply_markup=ai_friendly_filter_keyboard()
     )
 
@@ -117,7 +118,7 @@ async def set_ai_task_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     task_name = task_names.get(task_type, task_type)
 
     await query.edit_message_text(
-        f"✅ Тип задачи установлен: {task_name}\n\n"
+        f"{P.CHECK} Тип задачи установлен: {task_name}\n\n"
         "Теперь бот будет искать заказы этого типа.",
         reply_markup=ai_friendly_filter_keyboard()
     )
@@ -130,13 +131,13 @@ async def simple_tasks_filter(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
     await query.edit_message_text(
-        "💼 **Простые задачи**\n\n"
+        f"{P.BRIEFCASE} **Простые задачи**\n\n"
         "Эти фильтры помогут найти заказы с минимальными требованиями:\n\n"
-        "• 📝 Написание текстов\n"
-        "• 🔍 Парсинг данных\n"
-        "• 📊 Обработка данных\n"
-        "• 🎨 Простой дизайн\n"
-        "• 📱 Простая вёрстка\n\n"
+        f"• {P.NOTE} Написание текстов\n"
+        f"• {P.SEARCH} Парсинг данных\n"
+        f"• {P.CHART} Обработка данных\n"
+        f"• {P.PALETTE} Простой дизайн\n"
+        f"• {P.MOBILE} Простая вёрстка\n\n"
         "Настройте фильтры для поиска простых задач.",
         reply_markup=kwork_filters_keyboard(),
         parse_mode=None
@@ -150,7 +151,7 @@ async def budget_filter_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
 
     await query.edit_message_text(
-        "📊 **Фильтр по бюджету**\n\n"
+        f"{P.CHART} **Фильтр по бюджету**\n\n"
         "Введите диапазон бюджета в формате: мин макс\n"
         "Например: 5000 50000\n\n"
         "Или /cancel для отмены.",
@@ -168,7 +169,7 @@ async def save_budget_filter(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if len(parts) != 2:
         await update.message.reply_text(
-            "❌ Неверный формат. Используйте: мин макс\nНапример: 5000 50000"
+            f"{P.CROSS} Неверный формат. Используйте: мин макс\nНапример: 5000 50000"
         )
         return ENTERING_BUDGET_FILTER
 
@@ -177,19 +178,19 @@ async def save_budget_filter(update: Update, context: ContextTypes.DEFAULT_TYPE)
         max_budget = int(parts[1])
     except ValueError:
         await update.message.reply_text(
-            "❌ Неверный формат. Используйте числа.\nНапример: 5000 50000"
+            f"{P.CROSS} Неверный формат. Используйте числа.\nНапример: 5000 50000"
         )
         return ENTERING_BUDGET_FILTER
 
     if min_budget < 0 or max_budget < 0:
         await update.message.reply_text(
-            "❌ Бюджет не может быть отрицательным."
+            f"{P.CROSS} Бюджет не может быть отрицательным."
         )
         return ENTERING_BUDGET_FILTER
 
     if min_budget > max_budget:
         await update.message.reply_text(
-            "❌ Минимальный бюджет не может быть больше максимального."
+            f"{P.CROSS} Минимальный бюджет не может быть больше максимального."
         )
         return ENTERING_BUDGET_FILTER
 
@@ -201,7 +202,7 @@ async def save_budget_filter(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await queries.save_freelancer_profile(db, profile)
 
     await update.message.reply_text(
-        f"✅ Диапазон бюджета сохранён: {min_budget} - {max_budget} руб.",
+        f"{P.CHECK} Диапазон бюджета сохранён: {min_budget} - {max_budget} руб.",
         reply_markup=kwork_filters_keyboard()
     )
     return ConversationHandler.END
@@ -214,7 +215,7 @@ async def deadline_filter_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     await query.edit_message_text(
-        "⏱ **Фильтр по срокам**\n\n"
+        f"{P.TIMER} **Фильтр по срокам**\n\n"
         "Введите максимальный срок выполнения в днях:\n"
         "Например: 14\n\n"
         "Или /cancel для отмены.",
@@ -230,15 +231,15 @@ async def save_deadline_filter(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         days = int(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ Неверный формат. Используйте число (дни).")
+        await update.message.reply_text(f"{P.CROSS} Неверный формат. Используйте число (дни).")
         return ENTERING_DEADLINE_FILTER
 
     if days <= 0:
-        await update.message.reply_text("❌ Срок должен быть положительным числом.")
+        await update.message.reply_text(f"{P.CROSS} Срок должен быть положительным числом.")
         return ENTERING_DEADLINE_FILTER
 
     if days > 365:
-        await update.message.reply_text("❌ Срок не может быть больше 365 дней.")
+        await update.message.reply_text(f"{P.CROSS} Срок не может быть больше 365 дней.")
         return ENTERING_DEADLINE_FILTER
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -248,7 +249,7 @@ async def save_deadline_filter(update: Update, context: ContextTypes.DEFAULT_TYP
             await queries.save_freelancer_profile(db, profile)
 
     await update.message.reply_text(
-        f"✅ Максимальный срок сохранён: {days} дней",
+        f"{P.CHECK} Максимальный срок сохранён: {days} дней",
         reply_markup=kwork_filters_keyboard()
     )
     return ConversationHandler.END
@@ -261,7 +262,7 @@ async def skills_filter_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
 
     await query.edit_message_text(
-        "🏷 **Фильтр по навыкам**\n\n"
+        f"{P.LABEL} **Фильтр по навыкам**\n\n"
         "Введите навыки через запятую (навыки, которые должны быть в заказе):\n"
         "Например: Python, Django, React\n\n"
         "Или /cancel для отмены.",
@@ -288,7 +289,7 @@ async def _save_profile_field(update: Update, field_name: str, value) -> None:
         setattr(profile, field_name, value)
         await queries.save_freelancer_profile(db, profile)
 
-    await update.message.reply_text(f"✅ {field_name} сохранён!")
+    await update.message.reply_text(f"{P.CHECK} {field_name} сохранён!")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -296,12 +297,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=kwork_filters_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=kwork_filters_keyboard()
         )
     return ConversationHandler.END

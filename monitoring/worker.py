@@ -42,10 +42,12 @@ from core.models import (
     ProjectAnalysis,
     Reminder,
     ReminderStatus,
+    SubscriptionTier,
     User,
     utcnow,
 )
 from core.scoring import ScoreResult, estimate_hours, score_project
+from emoji_config import E
 from monitoring.adapters.base import RawListing, SourceAdapter
 from monitoring.collector import Collector
 from services.logger_config import get_logger
@@ -473,8 +475,17 @@ async def _claim_due_reminder(
     orphaned rows — those are completed silently).
     """
     async with factory() as session:
-        reminder = await session.get(Reminder, reminder_id)
-        if reminder is None or reminder.status is not ReminderStatus.PENDING:
+        reminder = (
+            await session.execute(
+                select(Reminder)
+                .where(
+                    Reminder.id == reminder_id,
+                    Reminder.status == ReminderStatus.PENDING,
+                )
+                .with_for_update(skip_locked=True)
+            )
+        ).scalar_one_or_none()
+        if reminder is None:
             return None
         client_row = await session.get(Client, reminder.client_id)
         if client_row is None:
@@ -590,7 +601,7 @@ async def run_weekly_report_tick(
                 f"{analyses[1]:.0f}%" if analyses[1] is not None else "—"
             )
             text = (
-                "📊 <b>Неделя в FreelanceRadar</b>\n"
+                f"{E.CHART} <b>Неделя в FreelanceRadar</b>\n"
                 f"Проанализировано заказов: <b>{analyses[0]}</b>\n"
                 f"Лучшая вероятность: <b>{best}</b>\n"
                 f"Откликов отправлено: <b>{proposals_sent}</b>\n"
@@ -602,6 +613,82 @@ async def run_weekly_report_tick(
                 delivered += 1
     if delivered:
         logger.info("v2.weekly_reports_sent", count=delivered)
+    return delivered
+
+
+#: Warn this many days before the subscription/trial ends (§7 monetization).
+EXPIRY_WARN_DAYS = 2
+
+
+def _expiry_message(user: User, days: Optional[int], expired: bool) -> str:
+    """Build the expiry nudge text (honest, one CTA, no dark patterns)."""
+    price = tariffs.PRIMARY_PRICE_RUB
+    if expired:
+        return (
+            f"{E.LOCK} <b>Доступ приостановлен</b>\n\n"
+            "Сканирование заказов и AI-отклики остановлены. "
+            "Портфолио, CRM и история откликов сохранены.\n\n"
+            f"Вернуть радар — {price} \u20bd/мес: /subscription"
+        )
+    tail = f"через {days} дн." if days else "сегодня"
+    if user.subscription_tier is SubscriptionTier.TRIAL:
+        return (
+            f"{E.HOURGLASS} <b>Бесплатный период заканчивается {tail}</b>\n\n"
+            "Чтобы радар не остановился — подключите Радар PRO "
+            f"за {price} \u20bd/мес: /subscription\n\n"
+            "<i>Автосписаний нет — платёж только вручную.</i>"
+        )
+    return (
+        f"{E.HOURGLASS} <b>Подписка заканчивается {tail}</b>\n\n"
+        f"Продлить за {price} \u20bd/мес: /subscription"
+    )
+
+
+async def run_expiry_reminders_tick(
+    application: Optional[Application],
+    session_factory: Optional[async_sessionmaker] = None,
+    notify: Optional[NotifyFn] = None,
+) -> int:
+    """Warn users whose access ends soon, and once after it ended.
+
+    Idempotent per period: ``expiry_notified_at`` is stamped and committed
+    BEFORE sending (at-most-once, same discipline as reminders §3.8), so a
+    crash never turns into a repeated nag. Users without an expiry date
+    (manual grants) are skipped.
+    """
+    factory = session_factory or get_session_factory()
+    notify_fn: NotifyFn = notify or default_notify
+    now = utcnow()
+    delivered = 0
+
+    async with factory() as session:
+        users = (await session.execute(select(User))).scalars().all()
+        targets: List[Tuple[int, str]] = []
+        for user in users:
+            expires = user.subscription_expires_at
+            if expires is None:
+                continue
+            days = tariffs.days_left(user, now)
+            expired = expires <= now
+            if not expired and (days is None or days > EXPIRY_WARN_DAYS):
+                continue
+            # One nudge per period: skip if already warned after the last
+            # renewal (the stamp is reset on every successful payment).
+            if user.expiry_notified_at is not None:
+                continue
+            user.expiry_notified_at = now
+            targets.append(
+                (user.telegram_id, _expiry_message(user, days, expired))
+            )
+        if not targets:
+            return 0
+        await session.commit()
+
+    for chat_id, text in targets:
+        if await notify_fn(application, chat_id, text, None) is not False:
+            delivered += 1
+    if delivered:
+        logger.info("v2.expiry_reminders_sent", count=delivered)
     return delivered
 
 
@@ -635,6 +722,17 @@ def register_v2_jobs(scheduler: object, application: Application) -> None:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=JOB_MISFIRE_GRACE_SECONDS,
+    )
+    scheduler.add_job(  # type: ignore[attr-defined]
+        run_expiry_reminders_tick,
+        "cron",
+        hour=9,  # 12:00 МСК — никогда ночью
+        minute=30,
+        args=[application],
+        id="v2_expiry_reminders",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     scheduler.add_job(  # type: ignore[attr-defined]
         run_weekly_report_tick,

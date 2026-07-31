@@ -1,77 +1,63 @@
-"""Health check script for Docker — async-correct, no config import.
-
-Reads DB_PATH from the environment so the healthcheck doesn't need
-the full secret set to run. Compatible with Docker HEALTHCHECK.
-"""
+"""Container readiness probe for configured V2 database and writable disk."""
 import asyncio
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 
-import aiosqlite
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
-LOG_MAX_AGE_SECONDS = 3600
+
+def normalize_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("sqlite:///") and "+aiosqlite" not in url:
+        return url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    return url
 
 
-async def check_db(db_path: str) -> bool:
-    """Check that the SQLite database is reachable and answers a query."""
+async def check_db(url: str) -> bool:
+    engine = create_async_engine(normalize_url(url), pool_pre_ping=True)
     try:
-        async with aiosqlite.connect(db_path) as db:
-            cursor = await db.execute("SELECT 1")
-            row = await cursor.fetchone()
-            return row is not None
-    except Exception as exc:  # noqa: BLE001 - any failure means unhealthy
-        print(f"db check failed: {exc}")
+        async with engine.connect() as connection:
+            return (await connection.execute(text("SELECT 1"))).scalar_one() == 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"db check failed: {type(exc).__name__}")
         return False
-
-
-def check_log() -> bool:
-    """Optional staleness probe for file logging (absent file = healthy)."""
-    log_path = Path("logs/freelance_radar.log")
-    if not log_path.exists():
-        return True
-    age = time.time() - log_path.stat().st_mtime
-    if age >= LOG_MAX_AGE_SECONDS:
-        print(f"log check failed: stale for {age:.0f}s")
-        return False
-    return True
+    finally:
+        await engine.dispose()
 
 
 def check_disk() -> bool:
-    """Check disk space for data directory (cross-platform)."""
-    db_path = os.environ.get("DB_PATH", "freelance_radar.db")
-    data_dir = Path(db_path).parent if db_path else Path(".")
+    data_dir = Path(os.environ.get("DATA_DIR", "/app/data"))
     try:
-        usage = shutil.disk_usage(str(data_dir.resolve()))
-        free_gb = usage.free / (1024 ** 3)
-        if free_gb < 0.1:
-            print(f"disk check failed: only {free_gb:.2f} GB free")
-            return False
-        return True
+        data_dir.mkdir(parents=True, exist_ok=True)
+        probe = data_dir / ".readiness"
+        probe.write_text("ok", encoding="ascii")
+        probe.unlink()
+        minimum = int(os.environ.get("MIN_DISK_FREE_MB", "100")) * 1024 * 1024
+        return shutil.disk_usage(data_dir).free >= minimum
     except (OSError, ValueError):
-        return True  # Skip check if unavailable
+        return False
 
 
 def main() -> int:
-    """Run all probes; exit 0 only when everything is healthy."""
-    db_path = os.environ.get("DB_PATH", "freelance_radar.db")
-    db_ok = asyncio.run(check_db(db_path))
-    log_ok = check_log()
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        db_path = os.environ.get("DB_PATH", "freelance_radar_v2.db")
+        # Do not let SQLite silently create a missing parent during readiness.
+        parent = Path(db_path).parent
+        if parent != Path(".") and not parent.exists():
+            print("db=fail disk=fail")
+            return 1
+        url = f"sqlite+aiosqlite:///{db_path}"
+    db_ok = asyncio.run(check_db(url))
     disk_ok = check_disk()
-
-    if db_ok and log_ok:
-        print(f"Healthcheck: OK")
-        print(f"  db: {'✅' if db_ok else '❌'}")
-        print(f"  log: {'✅' if log_ok else '❌'}")
-        print(f"  disk: {'✅' if disk_ok else '❌'}")
-        return 0
-    print(f"Healthcheck: FAIL")
-    print(f"  db: {'✅' if db_ok else '❌'}")
-    print(f"  log: {'✅' if log_ok else '❌'}")
-    print(f"  disk: {'✅' if disk_ok else '❌'}")
-    return 1
+    print(f"db={'ok' if db_ok else 'fail'} disk={'ok' if disk_ok else 'fail'}")
+    return 0 if db_ok and disk_ok else 1
 
 
 if __name__ == "__main__":

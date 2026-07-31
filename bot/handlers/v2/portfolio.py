@@ -16,6 +16,7 @@ from telegram.ext import (
 from bot.handlers.v2.common import esc, get_or_create_user, pending
 from core.db import get_session_factory
 from core.models import PortfolioItem
+from emoji_config import E, P, btn_danger, btn_neutral, btn_primary
 
 P_TITLE, P_DESC, P_TAGS = range(3)
 
@@ -24,23 +25,38 @@ def _portfolio_keyboard(items: List[PortfolioItem]) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                f"\U0001f5d1 {item.title[:30]}", callback_data=f"v2pf:del:{item.id}"
+                # Красный маркер: тап по кейсу удаляет его.
+                btn_danger(item.title[:30], P.TRASH),
+                callback_data=f"v2pf:del:{item.id}",
             )
         ]
         for item in items
     ]
-    rows.append([InlineKeyboardButton("➕ Добавить кейс", callback_data="v2pf:add")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                btn_primary("Добавить кейс", P.PLUS), callback_data="v2pf:add"
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                btn_neutral("В меню", P.BACK), callback_data="v2:menu"
+            )
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
 def _render_list(items: List[PortfolioItem]) -> str:
     if not items:
         return (
-            "\U0001f4bc <b>Портфолио</b>\n"
+            f"{E.BRIEFCASE} <b>Портфолио</b>\n"
             "Пока пусто. Добавьте кейсы — отклики строятся только на фактах "
             "из портфолио и без него AI-генерация недоступна."
         )
-    lines = ["\U0001f4bc <b>Портфолио</b>"]
+    lines = [f"{E.BRIEFCASE} <b>Портфолио</b>"]
     for item in items:
         tags = f" [{', '.join(item.tags)}]" if item.tags else ""
         lines.append(f"• <b>{esc(item.title)}</b>{esc(tags)}")
@@ -144,7 +160,9 @@ async def portfolio_add_tags(
             )
         )
         await session.commit()
-    await update.message.reply_text("Кейс сохранён \U0001f4bc Список: /portfolio")
+    await update.message.reply_text(
+        f"{P.CHECK} Кейс сохранён. Список: /portfolio"
+    )
     return ConversationHandler.END
 
 
@@ -155,7 +173,7 @@ async def portfolio_add_cancel(
     pending(context).pop("v2_pf_title", None)
     pending(context).pop("v2_pf_desc", None)
     if update.message is not None:
-        await update.message.reply_text("Добавление кейса отменено.")
+        await update.message.reply_text(f"{P.CROSS} Добавление кейса отменено.")
     return ConversationHandler.END
 
 

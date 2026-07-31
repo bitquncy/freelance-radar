@@ -1,66 +1,45 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-radar}
+      POSTGRES_DB: ${POSTGRES_DB:-freelanceradar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   bot:
     build: .
-    container_name: freelance-radar
     restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-      - ./freelance_radar.db:/app/freelance_radar.db
-      - ./freelance_radar_session.session:/app/freelance_radar_session.session
+    env_file: [.env]
     environment:
-      - DB_PATH=freelance_radar.db
-      # V2 database lives in the mounted ./data volume so users/subscriptions
-      # /CRM survive container re-creation. For production load switch to
-      # PostgreSQL (see the commented service below) per AGENTS.md §4.2.
-      - DATABASE_URL=sqlite+aiosqlite:///data/freelance_radar_v2.db
-      - PTB_STATE_DIR=data
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
-        reservations:
-          cpus: "0.25"
-          memory: 128M
+      ENVIRONMENT: production
+      BOT_REPLICAS: "1"
+      RADAR_V2_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-freelanceradar}
+      PTB_STATE_DIR: /app/data
+      DATA_DIR: /app/data
+    volumes:
+      - botdata:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "/app/healthcheck.py"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 60s
       retries: 3
-    stop_grace_period: 30s
-    labels:
-      - "com.freelanceradar.version=1.0"
-      - "com.freelanceradar.description=FreelanceRadar Telegram Bot"
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
-# Production V2 path (AGENTS.md §4.2): PostgreSQL instead of SQLite.
-# Uncomment, set DATABASE_URL above to
-#   postgresql+asyncpg://radar:${POSTGRES_PASSWORD}@postgres:5432/freelanceradar
-# and add `depends_on: [postgres]` to the bot service.
-#
-#  postgres:
-#    image: postgres:16-alpine
-#    restart: unless-stopped
-#    environment:
-#      - POSTGRES_USER=radar
-#      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-#      - POSTGRES_DB=freelanceradar
-#    volumes:
-#      - pgdata:/var/lib/postgresql/data
-#    healthcheck:
-#      test: ["CMD-SHELL", "pg_isready -U radar -d freelanceradar"]
-#      interval: 10s
-#      timeout: 5s
-#      retries: 5
-#
-#volumes:
-#  pgdata:
+volumes:
+  pgdata:
+  botdata:

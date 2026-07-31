@@ -3,14 +3,45 @@
 Registered only when ``RADAR_V2_ENABLED`` is on — the legacy single-owner
 bot behavior is untouched by default (AGENTS.md §12.4: scope discipline).
 """
+from telegram import BotCommand
 from telegram.ext import Application
 
+from emoji_config import P
+
 HANDLER_GROUP = 5
+
+#: Shown in Telegram's native command menu (the ☰ button) — discoverability
+#: without the user having to read documentation.
+#: Описания команд — plain Unicode: Telegram не парсит здесь HTML,
+#: поэтому <tg-emoji> протёк бы как текст.
+BOT_COMMANDS = [
+    BotCommand("menu", f"{P.RADAR} Главное меню и статус радара"),
+    BotCommand("radar", f"{P.SETTINGS} Профиль: ставка, налоги, навыки"),
+    BotCommand("portfolio", f"{P.BRIEFCASE} Портфолио для AI-откликов"),
+    BotCommand("clients", f"{P.PEOPLE} CRM и воронка клиентов"),
+    BotCommand("subscription", f"{P.STAR} Подписка и оплата"),
+    BotCommand("help", f"{P.HELP} Как это работает"),
+]
+
+
+async def publish_bot_commands(application: Application) -> None:
+    """Push the command list to Telegram (best-effort, never fatal).
+
+    A failure here only costs the ☰ hints, so a network hiccup at startup
+    must not prevent the bot from serving updates.
+    """
+    from services.logger_config import get_logger
+
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+    except Exception as exc:  # noqa: BLE001 - cosmetic feature, log and go on
+        get_logger(__name__).warning("v2.set_commands_failed", error=str(exc))
 
 
 def register_v2_handlers(application: Application) -> None:
     """Attach all V2 handlers to the application (group 5, no legacy clashes)."""
     from bot.handlers.v2.crm_handlers import get_crm_handlers
+    from bot.handlers.v2.menu import get_menu_handlers
     from bot.handlers.v2.onboarding import get_onboarding_handlers
     from bot.handlers.v2.payments import get_payment_handlers
     from bot.handlers.v2.portfolio import get_portfolio_handlers
@@ -23,7 +54,8 @@ def register_v2_handlers(application: Application) -> None:
     # persistence backend configured (main.py wires PicklePersistence).
     persistent = application.persistence is not None
     handlers = (
-        get_onboarding_handlers(persistent=persistent)
+        get_menu_handlers()
+        + get_onboarding_handlers(persistent=persistent)
         + get_portfolio_handlers(persistent=persistent)
         + get_source_handlers()
         + get_proposal_handlers()

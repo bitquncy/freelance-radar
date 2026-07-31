@@ -1,11 +1,17 @@
 """Tariff plans, limits and feature gating — AGENTS.md §7.
 
+Pricing model (owner decision, supersedes the three-tier §7 table):
+    ONE paid plan — «Радар PRO», 300 ₽/мес, everything included, plus a
+    7-day free trial without a card. Fewer choices → higher conversion;
+    the tier machinery is kept so historical BASIC/BUSINESS rows and
+    manually granted subscriptions keep working.
+
 Spec-conflict resolution (documented per §12.6): §2.4 says auto-send is
 Business-only, while §3.5 and §6.4 both say Pro/Business. The two explicit
 product sections win: auto-send is available on Pro and Business, always
 opt-in and threshold-gated (§6.4).
 
-The 7-day trial (§7) grants Pro-level limits (documented assumption).
+The 7-day trial (§7) grants full Pro-level limits.
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -16,10 +22,14 @@ from core.models import SubscriptionTier, User, utcnow
 TRIAL_DAYS = 7
 ANNUAL_DISCOUNT = 0.20
 
+#: The single paid plan and its price (owner decision).
+PRIMARY_TIER = SubscriptionTier.PRO
+PRIMARY_PRICE_RUB = 300
+
 PRICES_RUB: Dict[SubscriptionTier, int] = {
-    SubscriptionTier.BASIC: 299,
-    SubscriptionTier.PRO: 599,
-    SubscriptionTier.BUSINESS: 999,
+    SubscriptionTier.BASIC: PRIMARY_PRICE_RUB,
+    SubscriptionTier.PRO: PRIMARY_PRICE_RUB,
+    SubscriptionTier.BUSINESS: PRIMARY_PRICE_RUB,
 }
 
 
@@ -60,21 +70,22 @@ _BASIC = TariffLimits(
     personal_scoring=False,
 )
 
+#: «Радар PRO» — the single paid plan: everything is on, nothing is capped.
 _PRO = TariffLimits(
-    max_exchanges=3,
+    max_exchanges=None,
     max_tg_channels=None,
     analyses_per_month=None,
     max_active_clients=None,
     ai_generation=True,
     portfolio_adaptation=True,
-    tone_variants=1,
+    tone_variants=3,
     reminders=True,
     auto_send=True,
     weekly_report=True,
     team_seats=1,
-    export_integrations=False,
-    priority_scan=False,
-    personal_scoring=False,
+    export_integrations=True,
+    priority_scan=True,
+    personal_scoring=True,
 )
 
 _BUSINESS = TariffLimits(
@@ -105,6 +116,25 @@ LIMITS: Dict[SubscriptionTier, TariffLimits] = {
 def trial_expiry(now: Optional[datetime] = None) -> datetime:
     """Compute trial expiry timestamp from ``now``."""
     return (now or utcnow()) + timedelta(days=TRIAL_DAYS)
+
+
+def days_left(user: User, now: Optional[datetime] = None) -> Optional[int]:
+    """Whole days remaining on the subscription (``None`` = no expiry set).
+
+    Rounded UP so "осталось 0 дней" is never shown while access is still
+    live — the last partial day reads as 1.
+    """
+    if user.subscription_expires_at is None:
+        return None
+    seconds = (user.subscription_expires_at - (now or utcnow())).total_seconds()
+    if seconds <= 0:
+        return 0
+    return max(1, -int(-seconds // 86400))  # ceil, so a partial day reads as 1
+
+
+def is_trial(user: User, now: Optional[datetime] = None) -> bool:
+    """Whether the user is currently on the free 7-day trial."""
+    return effective_tier(user, now) is SubscriptionTier.TRIAL
 
 
 def effective_tier(

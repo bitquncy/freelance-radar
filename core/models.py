@@ -150,6 +150,9 @@ class User(Base):
         _enum_col(SubscriptionTier), default=SubscriptionTier.TRIAL
     )
     subscription_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    #: Last time the user was warned about an ending/ended subscription —
+    #: makes the expiry-reminder job idempotent (one nudge per period).
+    expiry_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     auto_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_send_threshold: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -184,6 +187,10 @@ class ExchangeConnection(Base):
             sqlite_where=text("platform != 'tg_channel'"),
             postgresql_where=text("platform != 'tg_channel'"),
         ),
+        UniqueConstraint(
+            "user_id", "platform", "normalized_identity",
+            name="uq_connections_user_platform_identity",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -191,6 +198,7 @@ class ExchangeConnection(Base):
     platform: Mapped[Platform] = mapped_column(_enum_col(Platform))
     credentials_ref: Mapped[Optional[str]] = mapped_column(String(255))
     settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    normalized_identity: Mapped[Optional[str]] = mapped_column(String(255))
     status: Mapped[ConnectionStatus] = mapped_column(
         _enum_col(ConnectionStatus), default=ConnectionStatus.ACTIVE
     )

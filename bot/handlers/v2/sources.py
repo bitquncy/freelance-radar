@@ -9,7 +9,8 @@ from telegram.ext import BaseHandler, CallbackQueryHandler, ContextTypes
 
 from bot.handlers.v2.common import esc, get_or_create_user, pending
 from core import tariffs
-from core.models import ConnectionStatus, ExchangeConnection, Platform
+from emoji_config import BTN_MUTED, E, P, btn_neutral
+from core.models import ConnectionStatus, ExchangeConnection, Platform, User
 from core.db import get_session_factory
 
 PLATFORM_TITLES = {
@@ -27,22 +28,30 @@ def _sources_keyboard(connections: List[ExchangeConnection]) -> InlineKeyboardMa
         title = PLATFORM_TITLES.get(connection.platform, connection.platform.value)
         if connection.platform is Platform.TG_CHANNEL:
             title += f" {connection.settings.get('channel', '')}"
-        state = "\U0001f7e2" if connection.status is ConnectionStatus.ACTIVE else "⏸"
+        # Зелёный = сканируется, серый = отключён; красный — удаление.
+        state = P.GREEN if connection.status is ConnectionStatus.ACTIVE else BTN_MUTED
         rows.append(
             [
                 InlineKeyboardButton(
                     f"{state} {title}", callback_data=f"v2s:toggle:{connection.id}"
                 ),
                 InlineKeyboardButton(
-                    "\U0001f5d1", callback_data=f"v2s:del:{connection.id}"
+                    f"{P.RED} {P.TRASH}", callback_data=f"v2s:del:{connection.id}"
                 ),
             ]
         )
     rows.append(
         [
-            InlineKeyboardButton("➕ Kwork", callback_data="v2s:add:kwork"),
-            InlineKeyboardButton("➕ FL.ru", callback_data="v2s:add:fl_ru"),
-            InlineKeyboardButton("➕ TG-канал", callback_data="v2s:add:tg"),
+            InlineKeyboardButton(f"{P.PLUS} Kwork", callback_data="v2s:add:kwork"),
+            InlineKeyboardButton(f"{P.PLUS} FL.ru", callback_data="v2s:add:fl_ru"),
+            InlineKeyboardButton(f"{P.PLUS} TG-канал", callback_data="v2s:add:tg"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                btn_neutral("В меню", P.BACK), callback_data="v2:menu"
+            )
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -63,11 +72,14 @@ async def sources_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         connections = list(result.scalars().all())
         await session.commit()
     text = (
-        "\U0001f4e1 <b>Источники</b>\n"
+        f"{E.RADAR} <b>Источники</b>\n"
         "Радар мониторит подключённые источники и присылает новые заказы "
-        "со скорингом."
+        f"со скорингом.\n\n{E.GREEN} — сканируется, ⚪ — на паузе."
         if connections
-        else "\U0001f4e1 <b>Источники</b>\nПока ничего не подключено — добавьте первый источник."
+        else (
+            f"{E.RADAR} <b>Источники</b>\n"
+            "Пока ничего не подключено — добавьте первый источник."
+        )
     )
     await query.edit_message_text(
         text, parse_mode="HTML", reply_markup=_sources_keyboard(connections)
@@ -115,7 +127,9 @@ async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         platform = Platform.KWORK if kind == "kwork" else Platform.FL_RU
         if any(c.platform is platform for c in connections):
-            await query.answer("Этот источник уже подключён.", show_alert=True)
+            await query.answer(
+                f"{P.WARNING} Этот источник уже подключён.", show_alert=True
+            )
             return
         if not tariffs.can_connect_exchange(tier, exchanges):
             await query.answer(
@@ -133,10 +147,12 @@ async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 )
                 await session.flush()
         except IntegrityError:
-            await query.answer("Этот источник уже подключён.", show_alert=True)
+            await query.answer(
+                f"{P.WARNING} Этот источник уже подключён.", show_alert=True
+            )
             return
         await session.commit()
-    await query.answer(f"{PLATFORM_TITLES[platform]} подключён.")
+    await query.answer(f"{P.CHECK} {PLATFORM_TITLES[platform]} подключён.")
     await sources_menu(update, context)
 
 
@@ -194,11 +210,20 @@ async def add_channel_from_text(
     if not username.startswith("@"):
         username = f"@{username}"
     if len(username) < 4:
-        await update.message.reply_text("Похоже, это не username канала.")
+        await update.message.reply_text(
+            f"{P.EXCLAMATION} Похоже, это не username канала."
+        )
         return
     factory = get_session_factory()
     async with factory() as session:
         user, _ = await get_or_create_user(session, update.effective_user)
+        # Serialize quota allocation per user. The unique normalized identity
+        # remains the final duplicate guard across workers.
+        user = (
+            await session.execute(
+                select(User).where(User.id == user.id).with_for_update()
+            )
+        ).scalar_one()
         result = await session.execute(
             select(ExchangeConnection).where(
                 ExchangeConnection.user_id == user.id,
@@ -210,7 +235,7 @@ async def add_channel_from_text(
             str(c.settings.get("channel", "")).casefold() for c in channels
         }
         if username.casefold() in existing:
-            await update.message.reply_text("Этот канал уже подключён.")
+            await update.message.reply_text(f"{P.WARNING} Этот канал уже подключён.")
             return
         tier = tariffs.effective_tier(user)
         if not tariffs.can_connect_tg_channel(tier, len(channels)):
@@ -223,11 +248,17 @@ async def add_channel_from_text(
                 user_id=user.id,
                 platform=Platform.TG_CHANNEL,
                 settings={"channel": username},
+                normalized_identity=username.casefold(),
             )
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            await update.message.reply_text(f"{P.WARNING} Этот канал уже подключён.")
+            return
     await update.message.reply_text(
-        f"Канал {esc(username)} подключён \U0001f4e1", parse_mode="HTML"
+        f"{E.CHECK} Канал {esc(username)} подключён", parse_mode="HTML"
     )
 
 

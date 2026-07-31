@@ -1,13 +1,35 @@
 """Keyboard layouts for the Telegram bot."""
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+from emoji_config import P
+
+# Единый источник истины для подписей reply-меню: они же служат
+# матчерами входящего текста в ``main.py``. Держать их в одном месте
+# обязательно: рассогласование сделало бы кнопки нажатыми-без-реакции.
+MENU_JOBS = f"{P.LIST} Вакансии"
+MENU_SETTINGS = f"{P.SETTINGS} Настройки"
+MENU_SOURCES = f"{P.RADAR} Источники"
+MENU_STATS = f"{P.CHART} Статистика"
+MENU_PROFILE = f"{P.USER} Профиль"
+MENU_HELP = f"{P.HELP} Помощь"
+
+#: Порядок важен — из него строится и сетка кнопок, и регулярка роутера.
+MAIN_MENU_BUTTONS = (
+    MENU_JOBS,
+    MENU_SETTINGS,
+    MENU_SOURCES,
+    MENU_STATS,
+    MENU_PROFILE,
+    MENU_HELP,
+)
+
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Main menu keyboard."""
     keyboard = [
-        ["📋 Вакансии", "⚙️ Настройки"],
-        ["📡 Источники", "📊 Статистика"],
-        ["👤 Профиль", "❓ Помощь"]
+        [MENU_JOBS, MENU_SETTINGS],
+        [MENU_SOURCES, MENU_STATS],
+        [MENU_PROFILE, MENU_HELP],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -15,9 +37,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 def sources_keyboard() -> InlineKeyboardMarkup:
     """Sources management keyboard."""
     keyboard = [
-        [InlineKeyboardButton("➕ Добавить источник", callback_data="add_source")],
-        [InlineKeyboardButton("📋 Список источников", callback_data="list_sources")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton(f"{P.PLUS} Добавить источник", callback_data="add_source")],
+        [InlineKeyboardButton(f"{P.LIST} Список источников", callback_data="list_sources")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -27,18 +49,18 @@ def source_type_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("Kwork", callback_data="source_type_kwork")],
         [InlineKeyboardButton("Telegram канал", callback_data="source_type_telegram")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
+        [InlineKeyboardButton(f"{P.CROSS} Отмена", callback_data="cancel")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def source_actions_keyboard(source_id: int, enabled: bool) -> InlineKeyboardMarkup:
     """Actions for a specific source."""
-    toggle_text = "⏸ Отключить" if enabled else "▶️ Включить"
+    toggle_text = f"{P.PAUSE} Отключить" if enabled else f"{P.FORWARD} Включить"
     keyboard = [
         [InlineKeyboardButton(toggle_text, callback_data=f"toggle_source_{source_id}")],
-        [InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_source_{source_id}")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="list_sources")]
+        [InlineKeyboardButton(f"{P.TRASH} Удалить", callback_data=f"delete_source_{source_id}")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="list_sources")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -46,10 +68,10 @@ def source_actions_keyboard(source_id: int, enabled: bool) -> InlineKeyboardMark
 def vacancy_keyboard(kwork_id: str) -> InlineKeyboardMarkup:
     """Actions for a vacancy."""
     keyboard = [
-        [InlineKeyboardButton("✅ Подходит", callback_data=f"vacancy_suitable_{kwork_id}")],
-        [InlineKeyboardButton("❌ Не подходит", callback_data=f"vacancy_skip_{kwork_id}")],
-        [InlineKeyboardButton("💬 Сгенерировать отклик", callback_data=f"vacancy_generate_{kwork_id}")],
-        [InlineKeyboardButton("🚫 В чёрный список", callback_data=f"vacancy_blacklist_{kwork_id}")]
+        [InlineKeyboardButton(f"{P.CHECK} Подходит", callback_data=f"vacancy_suitable_{kwork_id}")],
+        [InlineKeyboardButton(f"{P.CROSS} Не подходит", callback_data=f"vacancy_skip_{kwork_id}")],
+        [InlineKeyboardButton(f"{P.COMMENT} Сгенерировать отклик", callback_data=f"vacancy_generate_{kwork_id}")],
+        [InlineKeyboardButton(f"{P.BAN} В чёрный список", callback_data=f"vacancy_blacklist_{kwork_id}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -68,23 +90,23 @@ def quick_vacancy_actions_keyboard(
 
     # Row 1: main actions
     row1 = [
-        InlineKeyboardButton("💬 Отклик", callback_data=f"vacancy_generate_{kwork_id}"),
-        InlineKeyboardButton("👀 Подробнее", callback_data=f"vacancy_detail_{kwork_id}"),
+        InlineKeyboardButton(f"{P.COMMENT} Отклик", callback_data=f"vacancy_generate_{kwork_id}"),
+        InlineKeyboardButton(f"{P.EYES} Подробнее", callback_data=f"vacancy_detail_{kwork_id}"),
     ]
     keyboard.append(row1)
 
     # Row 2: navigation + high-priority quick send
     row2 = [
-        InlineKeyboardButton("⏳ Отложить", callback_data=f"vacancy_defer_{kwork_id}"),
-        InlineKeyboardButton("⏭ Пропустить", callback_data=f"vacancy_skip_{kwork_id}"),
+        InlineKeyboardButton(f"{P.HOURGLASS} Отложить", callback_data=f"vacancy_defer_{kwork_id}"),
+        InlineKeyboardButton(f"{P.SKIP} Пропустить", callback_data=f"vacancy_skip_{kwork_id}"),
     ]
     if priority == "high":
-        row2.insert(0, InlineKeyboardButton("🚀 Отправить", callback_data=f"vacancy_send_{kwork_id}"))
+        row2.insert(0, InlineKeyboardButton(f"{P.ROCKET} Отправить", callback_data=f"vacancy_send_{kwork_id}"))
     keyboard.append(row2)
 
     # Row 3: destructive
     row3 = [
-        InlineKeyboardButton("🚫 В чёрный список", callback_data=f"vacancy_blacklist_{kwork_id}"),
+        InlineKeyboardButton(f"{P.BAN} В чёрный список", callback_data=f"vacancy_blacklist_{kwork_id}"),
     ]
     keyboard.append(row3)
 
@@ -94,12 +116,12 @@ def quick_vacancy_actions_keyboard(
 def response_keyboard(response_id: int, kwork_id: str) -> InlineKeyboardMarkup:
     """Actions for a generated response."""
     keyboard = [
-        [InlineKeyboardButton("📋 Показать текст", callback_data=f"response_copy_{response_id}")],
-        [InlineKeyboardButton("✅ Отправить сейчас", callback_data=f"response_send_{response_id}")],
-        [InlineKeyboardButton("✏️ Отредактировать", callback_data=f"response_edit_{response_id}")],
-        [InlineKeyboardButton("🔄 Сгенерировать заново", callback_data=f"vacancy_generate_{kwork_id}")],
-        [InlineKeyboardButton("⏳ Отложить", callback_data=f"response_defer_{response_id}")],
-        [InlineKeyboardButton("❌ Отменить", callback_data=f"response_cancel_{response_id}")]
+        [InlineKeyboardButton(f"{P.LIST} Показать текст", callback_data=f"response_copy_{response_id}")],
+        [InlineKeyboardButton(f"{P.CHECK} Отправить сейчас", callback_data=f"response_send_{response_id}")],
+        [InlineKeyboardButton(f"{P.EDIT} Отредактировать", callback_data=f"response_edit_{response_id}")],
+        [InlineKeyboardButton(f"{P.RELOAD} Сгенерировать заново", callback_data=f"vacancy_generate_{kwork_id}")],
+        [InlineKeyboardButton(f"{P.HOURGLASS} Отложить", callback_data=f"response_defer_{response_id}")],
+        [InlineKeyboardButton(f"{P.CROSS} Отменить", callback_data=f"response_cancel_{response_id}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -107,12 +129,12 @@ def response_keyboard(response_id: int, kwork_id: str) -> InlineKeyboardMarkup:
 def settings_keyboard() -> InlineKeyboardMarkup:
     """Settings menu keyboard."""
     keyboard = [
-        [InlineKeyboardButton("📝 Промпт для анализа", callback_data="settings_analysis_prompt")],
-        [InlineKeyboardButton("💬 Промпт для откликов", callback_data="settings_response_prompt")],
-        [InlineKeyboardButton("💰 Диапазон бюджета", callback_data="settings_budget")],
-        [InlineKeyboardButton("⏱ Кулдаун рассылки", callback_data="settings_cooldown")],
-        [InlineKeyboardButton("🔍 Фильтры", callback_data="settings_filters")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton(f"{P.NOTE} Промпт для анализа", callback_data="settings_analysis_prompt")],
+        [InlineKeyboardButton(f"{P.COMMENT} Промпт для откликов", callback_data="settings_response_prompt")],
+        [InlineKeyboardButton(f"{P.MONEY} Диапазон бюджета", callback_data="settings_budget")],
+        [InlineKeyboardButton(f"{P.TIMER} Кулдаун рассылки", callback_data="settings_cooldown")],
+        [InlineKeyboardButton(f"{P.SEARCH} Фильтры", callback_data="settings_filters")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -120,12 +142,12 @@ def settings_keyboard() -> InlineKeyboardMarkup:
 def filters_settings_keyboard() -> InlineKeyboardMarkup:
     """Filter settings keyboard."""
     keyboard = [
-        [InlineKeyboardButton("📜 Белый список слов", callback_data="settings_whitelist")],
-        [InlineKeyboardButton("🚫 Чёрный список слов", callback_data="settings_blacklist")],
-        [InlineKeyboardButton("⭐ Мин. рейтинг заказчика", callback_data="settings_min_rating")],
-        [InlineKeyboardButton("📊 Макс. предложений", callback_data="settings_max_proposals")],
-        [InlineKeyboardButton("🤖 Авто-режим", callback_data="settings_auto_mode")],
-        [InlineKeyboardButton("◀️ Назад к настройкам", callback_data="settings_menu")]
+        [InlineKeyboardButton(f"{P.SCROLL} Белый список слов", callback_data="settings_whitelist")],
+        [InlineKeyboardButton(f"{P.BAN} Чёрный список слов", callback_data="settings_blacklist")],
+        [InlineKeyboardButton(f"{P.STAR} Мин. рейтинг заказчика", callback_data="settings_min_rating")],
+        [InlineKeyboardButton(f"{P.CHART} Макс. предложений", callback_data="settings_max_proposals")],
+        [InlineKeyboardButton(f"{P.ROBOT} Авто-режим", callback_data="settings_auto_mode")],
+        [InlineKeyboardButton(f"{P.PREV} Назад к настройкам", callback_data="settings_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -133,14 +155,14 @@ def filters_settings_keyboard() -> InlineKeyboardMarkup:
 def profile_keyboard() -> InlineKeyboardMarkup:
     """Freelancer profile keyboard."""
     keyboard = [
-        [InlineKeyboardButton("📝 Навыки", callback_data="profile_skills")],
-        [InlineKeyboardButton("📅 Опыт (лет)", callback_data="profile_experience")],
-        [InlineKeyboardButton("📂 Категории", callback_data="profile_categories")],
-        [InlineKeyboardButton("💰 Ставка/час", callback_data="profile_hourly_rate")],
-        [InlineKeyboardButton("🌟 Сильные стороны", callback_data="profile_strong_sides")],
-        [InlineKeyboardButton("📄 О себе", callback_data="profile_bio")],
-        [InlineKeyboardButton("🔗 Портфолио", callback_data="profile_portfolio")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton(f"{P.NOTE} Навыки", callback_data="profile_skills")],
+        [InlineKeyboardButton(f"{P.CALENDAR} Опыт (лет)", callback_data="profile_experience")],
+        [InlineKeyboardButton(f"{P.FOLDER} Категории", callback_data="profile_categories")],
+        [InlineKeyboardButton(f"{P.MONEY} Ставка/час", callback_data="profile_hourly_rate")],
+        [InlineKeyboardButton(f"{P.SPARKLE} Сильные стороны", callback_data="profile_strong_sides")],
+        [InlineKeyboardButton(f"{P.DOC} О себе", callback_data="profile_bio")],
+        [InlineKeyboardButton(f"{P.LINK} Портфолио", callback_data="profile_portfolio")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -148,10 +170,10 @@ def profile_keyboard() -> InlineKeyboardMarkup:
 def auto_mode_keyboard() -> InlineKeyboardMarkup:
     """Auto mode settings."""
     keyboard = [
-        [InlineKeyboardButton("▶️ Включить авто-режим", callback_data="auto_mode_on")],
-        [InlineKeyboardButton("⏸ Выключить авто-режим", callback_data="auto_mode_off")],
-        [InlineKeyboardButton("⏱ Задержка (мин)", callback_data="auto_mode_delay")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="settings_filters")]
+        [InlineKeyboardButton(f"{P.FORWARD} Включить авто-режим", callback_data="auto_mode_on")],
+        [InlineKeyboardButton(f"{P.PAUSE} Выключить авто-режим", callback_data="auto_mode_off")],
+        [InlineKeyboardButton(f"{P.TIMER} Задержка (мин)", callback_data="auto_mode_delay")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="settings_filters")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -159,8 +181,8 @@ def auto_mode_keyboard() -> InlineKeyboardMarkup:
 def confirm_keyboard(action: str) -> InlineKeyboardMarkup:
     """Confirmation keyboard."""
     keyboard = [
-        [InlineKeyboardButton("✅ Да", callback_data=f"confirm_{action}")],
-        [InlineKeyboardButton("❌ Нет", callback_data=f"cancel_{action}")]
+        [InlineKeyboardButton(f"{P.CHECK} Да", callback_data=f"confirm_{action}")],
+        [InlineKeyboardButton(f"{P.CROSS} Нет", callback_data=f"cancel_{action}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -168,7 +190,7 @@ def confirm_keyboard(action: str) -> InlineKeyboardMarkup:
 def cancel_keyboard() -> InlineKeyboardMarkup:
     """Simple cancel keyboard."""
     keyboard = [
-        [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
+        [InlineKeyboardButton(f"{P.CROSS} Отмена", callback_data="cancel")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -176,8 +198,8 @@ def cancel_keyboard() -> InlineKeyboardMarkup:
 def stats_keyboard() -> InlineKeyboardMarkup:
     """Statistics keyboard."""
     keyboard = [
-        [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_stats")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton(f"{P.RELOAD} Обновить", callback_data="refresh_stats")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -185,12 +207,12 @@ def stats_keyboard() -> InlineKeyboardMarkup:
 def kwork_filters_keyboard() -> InlineKeyboardMarkup:
     """Kwork filters menu keyboard."""
     keyboard = [
-        [InlineKeyboardButton("🤖 AI-дружественные", callback_data="kwork_ai_friendly")],
-        [InlineKeyboardButton("💼 Простые задачи", callback_data="kwork_simple_tasks")],
-        [InlineKeyboardButton("💰 Фильтр по бюджету", callback_data="kwork_filter_budget")],
-        [InlineKeyboardButton("⏱ Фильтр по срокам", callback_data="kwork_filter_deadline")],
-        [InlineKeyboardButton("🏷 Фильтр по навыкам", callback_data="kwork_filter_skills")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton(f"{P.ROBOT} AI-дружественные", callback_data="kwork_ai_friendly")],
+        [InlineKeyboardButton(f"{P.BRIEFCASE} Простые задачи", callback_data="kwork_simple_tasks")],
+        [InlineKeyboardButton(f"{P.MONEY} Фильтр по бюджету", callback_data="kwork_filter_budget")],
+        [InlineKeyboardButton(f"{P.TIMER} Фильтр по срокам", callback_data="kwork_filter_deadline")],
+        [InlineKeyboardButton(f"{P.LABEL} Фильтр по навыкам", callback_data="kwork_filter_skills")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -198,12 +220,12 @@ def kwork_filters_keyboard() -> InlineKeyboardMarkup:
 def ai_friendly_filter_keyboard() -> InlineKeyboardMarkup:
     """AI-friendly filter settings keyboard."""
     keyboard = [
-        [InlineKeyboardButton("✅ Включить", callback_data="kwork_ai_enable")],
-        [InlineKeyboardButton("❌ Выключить", callback_data="kwork_ai_disable")],
-        [InlineKeyboardButton("🎯 ИИ-генерация", callback_data="ai_task_type_generate")],
-        [InlineKeyboardButton("💻 Вайб-кодинг", callback_data="ai_task_type_vibe")],
-        [InlineKeyboardButton("🧪 Авто-тестирование", callback_data="ai_task_type_test")],
-        [InlineKeyboardButton("◀️ Назад к фильтрам", callback_data="kwork_filters_back")]
+        [InlineKeyboardButton(f"{P.CHECK} Включить", callback_data="kwork_ai_enable")],
+        [InlineKeyboardButton(f"{P.CROSS} Выключить", callback_data="kwork_ai_disable")],
+        [InlineKeyboardButton(f"{P.TARGET} ИИ-генерация", callback_data="ai_task_type_generate")],
+        [InlineKeyboardButton(f"{P.LAPTOP} Вайб-кодинг", callback_data="ai_task_type_vibe")],
+        [InlineKeyboardButton(f"{P.FLASK} Авто-тестирование", callback_data="ai_task_type_test")],
+        [InlineKeyboardButton(f"{P.PREV} Назад к фильтрам", callback_data="kwork_filters_back")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -211,11 +233,11 @@ def ai_friendly_filter_keyboard() -> InlineKeyboardMarkup:
 def tg_analysis_keyboard() -> InlineKeyboardMarkup:
     """Telegram analysis menu keyboard."""
     keyboard = [
-        [InlineKeyboardButton("📊 Анализ канала", callback_data="tg_analyze_channel")],
-        [InlineKeyboardButton("🎯 Поиск заказов", callback_data="tg_search_jobs")],
-        [InlineKeyboardButton("📈 Тренды и активность", callback_data="tg_analyze_trends")],
-        [InlineKeyboardButton("🤖 AI-анализ", callback_data="tg_ai_analyze")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+        [InlineKeyboardButton(f"{P.CHART} Анализ канала", callback_data="tg_analyze_channel")],
+        [InlineKeyboardButton(f"{P.TARGET} Поиск заказов", callback_data="tg_search_jobs")],
+        [InlineKeyboardButton(f"{P.GRAPH} Тренды и активность", callback_data="tg_analyze_trends")],
+        [InlineKeyboardButton(f"{P.ROBOT} AI-анализ", callback_data="tg_ai_analyze")],
+        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -227,10 +249,10 @@ def vacancy_list_keyboard(page: int, total_pages: int, vacancies: list) -> Inlin
     # Navigation row
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton("◀️ Назад", callback_data=f"vacancy_page_{page-1}"))
-    nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="vacancy_page_info"))
+        nav_row.append(InlineKeyboardButton(f"{P.PREV} Назад", callback_data=f"vacancy_page_{page-1}"))
+    nav_row.append(InlineKeyboardButton(f"{P.DOC} {page}/{total_pages}", callback_data="vacancy_page_info"))
     if page < total_pages:
-        nav_row.append(InlineKeyboardButton("Вперед ▶️", callback_data=f"vacancy_page_{page+1}"))
+        nav_row.append(InlineKeyboardButton(f"Вперед {P.FORWARD}", callback_data=f"vacancy_page_{page+1}"))
     keyboard.append(nav_row)
 
     # Vacancy buttons (limit to 5 per page)
@@ -243,6 +265,6 @@ def vacancy_list_keyboard(page: int, total_pages: int, vacancies: list) -> Inlin
         ])
 
     # Back to menu
-    keyboard.append([InlineKeyboardButton("◀️ В меню", callback_data="back_to_main")])
+    keyboard.append([InlineKeyboardButton(f"{P.PREV} В меню", callback_data="back_to_main")])
 
     return InlineKeyboardMarkup(keyboard)

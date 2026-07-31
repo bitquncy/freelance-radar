@@ -1,5 +1,4 @@
 """Database queries for FreelanceRadar bot."""
-import json
 import re
 
 import aiosqlite

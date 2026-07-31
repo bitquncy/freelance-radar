@@ -1,5 +1,6 @@
 """Main entry point for FreelanceRadar bot v2."""
 import asyncio
+import re
 import signal
 import sys
 from pathlib import Path
@@ -20,6 +21,13 @@ from services.event_bus import get_event_bus, Events
 from bot.auth import owner_only
 from config import BOT_TOKEN, MONITOR_INTERVAL_MINUTES, validate_config
 from bot.keyboards import (
+    MAIN_MENU_BUTTONS,
+    MENU_HELP,
+    MENU_JOBS,
+    MENU_PROFILE,
+    MENU_SETTINGS,
+    MENU_SOURCES,
+    MENU_STATS,
     settings_keyboard,
 )
 from bot.commands import (
@@ -70,17 +78,19 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Handle main menu button presses."""
     text = update.message.text
 
-    if text == "\U0001f4cb \u0412\u0430\u043a\u0430\u043d\u0441\u0438\u0438":
+    # Сравниваем с теми же константами, из которых собрана клавиатура,
+    # иначе смена иконки молча сломала бы реакцию на нажатие.
+    if text == MENU_JOBS:
         await jobs_menu(update, context)
-    elif text == "\u2699\ufe0f \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438":
+    elif text == MENU_SETTINGS:
         await settings_menu(update, context)
-    elif text == "\U0001f4e1 \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438":
+    elif text == MENU_SOURCES:
         await sources_menu(update, context)
-    elif text == "\U0001f4ca \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430":
+    elif text == MENU_STATS:
         await stats_command(update, context)
-    elif text == "\U0001f464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c":
+    elif text == MENU_PROFILE:
         await profile_menu(update, context)
-    elif text == "\u2753 \u041f\u043e\u043c\u043e\u0449\u044c":
+    elif text == MENU_HELP:
         await help_command(update, context)
 
 
@@ -105,11 +115,20 @@ async def handle_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle telegram errors. Suppress network errors during shutdown."""
+    """Log exceptions with safe correlation metadata, never update contents."""
+    effective_user = getattr(update, "effective_user", None)
+    effective_chat = getattr(update, "effective_chat", None)
+    update_id = getattr(update, "update_id", None)
+    fields = {
+        "error_type": type(context.error).__name__,
+        "update_id": update_id,
+        "telegram_user_id": getattr(effective_user, "id", None),
+        "chat_id": getattr(effective_chat, "id", None),
+    }
     if isinstance(context.error, telegram.error.NetworkError):
-        logger.warning("telegram.network_error", error=str(context.error))
+        logger.warning("telegram.network_error", **fields, exc_info=context.error)
     else:
-        logger.error("telegram.error", error=str(context.error))
+        logger.error("telegram.error", **fields, exc_info=context.error)
 
 
 async def _graceful_shutdown(application: Application, scheduler: AsyncIOScheduler) -> None:
@@ -153,7 +172,15 @@ def main() -> None:
     loop.run_until_complete(init_and_migrate())
 
     from config import get_config
-    v2_enabled = get_config().RADAR_V2_ENABLED
+    config = get_config()
+    v2_enabled = config.RADAR_V2_ENABLED
+    if config.ENVIRONMENT.casefold() == "production":
+        if config.DATABASE_URL.startswith("sqlite"):
+            raise RuntimeError("Production DATABASE_URL must use PostgreSQL")
+        if config.BOT_REPLICAS != 1:
+            raise RuntimeError(
+                "Local PicklePersistence requires BOT_REPLICAS=1; shared FSM is not configured"
+            )
     if v2_enabled:
         # Alembic (not create_all): records alembic_version so future
         # schema migrations apply cleanly on SQLite and PostgreSQL alike.
@@ -185,6 +212,13 @@ def main() -> None:
             await dispose_engine()
             logger.info("v2.resources_released")
 
+        async def _v2_post_init(app: Application) -> None:
+            """Publish the ☰ command menu once the bot is initialized."""
+            from bot.handlers.v2 import publish_bot_commands
+
+            await publish_bot_commands(app)
+
+        builder = builder.post_init(_v2_post_init)
         builder = builder.post_shutdown(_v2_post_shutdown)
     application = builder.build()
 
@@ -197,8 +231,13 @@ def main() -> None:
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("chart", chart_command))
 
+    # Регулярка собирается из тех же подписей, что и клавиатура (и экранируется),
+    # поэтому любая смена иконок остаётся согласованной автоматически.
+    menu_pattern = "^(?:{})$".format(
+        "|".join(re.escape(label) for label in MAIN_MENU_BUTTONS)
+    )
     application.add_handler(MessageHandler(
-        filters.Regex("^(\\U0001f4cb \u0412\u0430\u043a\u0430\u043d\u0441\u0438\u0438|\\u2699\\ufe0f \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438|\\U0001f4e1 \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438|\\U0001f4ca \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430|\\U0001f464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c|\\u2753 \u041f\u043e\u043c\u043e\u0449\u044c)$"),
+        filters.Regex(menu_pattern),
         handle_menu_buttons,
     ))
 

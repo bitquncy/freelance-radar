@@ -1,5 +1,6 @@
 """Project-wide constants and enums."""
 from enum import Enum
+from emoji_config import P
 
 
 class _StrEnum(str, Enum):
@@ -68,27 +69,27 @@ class Status(_StrEnum):
 
 # Emoji mapping
 PRIORITY_EMOJI = {
-    Priority.HIGH: "\U0001f525",
+    Priority.HIGH: f"{P.FIRE}",
     Priority.MEDIUM: "\u2b50",
-    Priority.LOW: "\U0001f4cc",
+    Priority.LOW: f"{P.PIN}",
 }
 
 PRIORITY_MAP = {
-    Priority.HIGH: ("\U0001f525", "High"),
+    Priority.HIGH: (f"{P.FIRE}", "High"),
     Priority.MEDIUM: ("\u2b50", "Medium"),
-    Priority.LOW: ("\U0001f4cc", "Low"),
+    Priority.LOW: (f"{P.PIN}", "Low"),
 }
 
 SOURCE_EMOJI = {
-    SourceType.KWORK: "\U0001f4bc",
-    SourceType.TELEGRAM: "\U0001f4e2",
+    SourceType.KWORK: f"{P.BRIEFCASE}",
+    SourceType.TELEGRAM: f"{P.MEGAPHONE}",
 }
 
 STATUS_EMOJI = {
-    Status.NEW: "\U0001f195",
+    Status.NEW: f"{P.NEW}",
     Status.ANALYZED: "\u2705",
-    Status.FILTERED: "\U0001f6ab",
-    Status.RESPONDED: "\U0001f4ac",
+    Status.FILTERED: f"{P.BAN}",
+    Status.RESPONDED: f"{P.COMMENT}",
 }
 
 # Default values

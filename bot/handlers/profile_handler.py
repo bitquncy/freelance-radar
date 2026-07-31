@@ -12,6 +12,7 @@ from bot.keyboards import profile_keyboard, cancel_keyboard
 from db import queries
 from db.models import FreelancerProfile
 from config import DB_PATH, OWNER_CHAT_ID
+from emoji_config import P
 
 logger = get_logger(__name__)
 
@@ -29,25 +30,25 @@ async def profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with aiosqlite.connect(DB_PATH) as db:
         profile = await queries.get_freelancer_profile(db, OWNER_CHAT_ID)
 
-    text = "👤 **Профиль фрилансера**\n\n"
+    text = f"{P.USER} **Профиль фрилансера**\n\n"
     if profile:
         if profile.skills:
             skills_list = profile.skills_list
-            text += f"📝 Навыки: {', '.join(skills_list)}\n"
+            text += f"{P.NOTE} Навыки: {', '.join(skills_list)}\n"
         if profile.experience_years:
-            text += f"📅 Опыт: {profile.experience_years} лет\n"
+            text += f"{P.CALENDAR} Опыт: {profile.experience_years} лет\n"
         if profile.preferred_categories:
             categories_list = profile.preferred_categories_list
-            text += f"📂 Категории: {', '.join(categories_list)}\n"
+            text += f"{P.FOLDER} Категории: {', '.join(categories_list)}\n"
         if profile.hourly_rate:
-            text += f"💰 Ставка: {profile.hourly_rate} руб/час\n"
+            text += f"{P.MONEY} Ставка: {profile.hourly_rate} руб/час\n"
         if profile.strong_sides:
-            text += f"🌟 Сильные стороны: {profile.strong_sides}\n"
+            text += f"{P.SPARKLE} Сильные стороны: {profile.strong_sides}\n"
         if profile.bio:
-            text += f"📄 О себе: {profile.bio}\n"
+            text += f"{P.DOC} О себе: {profile.bio}\n"
         if profile.portfolio_url:
-            text += f"🔗 Портфолио: {profile.portfolio_url}\n"
-        text += f"\n🤖 Авто-режим: {'✅ Включен' if profile.auto_mode_enabled else '❌ Выключен'}"
+            text += f"{P.LINK} Портфолио: {profile.portfolio_url}\n"
+        text += f"\n{P.ROBOT} Авто-режим: {'{P.CHECK} Включен' if profile.auto_mode_enabled else '{P.CROSS} Выключен'}"
         if profile.auto_mode_enabled:
             text += f" ({profile.auto_mode_delay_minutes} мин)"
     else:
@@ -67,7 +68,7 @@ async def profile_skills_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
     current = profile.skills_list if profile and profile.skills else "Не указаны"
     await query.edit_message_text(
-        f"📝 Текущие навыки: {current}\n\n"
+        f"{P.NOTE} Текущие навыки: {current}\n\n"
         "Введите навыки через запятую (например: Python, Django, PostgreSQL):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -94,7 +95,7 @@ async def profile_experience_start(update: Update, context: ContextTypes.DEFAULT
 
     current = profile.experience_years if profile and profile.experience_years else "Не указан"
     await query.edit_message_text(
-        f"📅 Текущий опыт: {current} лет\n\n"
+        f"{P.CALENDAR} Текущий опыт: {current} лет\n\n"
         "Введите опыт в годах (число):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -110,7 +111,7 @@ async def save_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _update_profile_field(update, "experience_years", years, f"Опыт сохранён: {years} лет")
         return ConversationHandler.END
     except ValueError:
-        await update.message.reply_text("❌ Введите число. Например: 3")
+        await update.message.reply_text(f"{P.CROSS} Введите число. Например: 3")
         return ENTERING_EXPERIENCE
 
 
@@ -125,7 +126,7 @@ async def profile_categories_start(update: Update, context: ContextTypes.DEFAULT
 
     current = profile.preferred_categories_list if profile and profile.preferred_categories else "Не указаны"
     await query.edit_message_text(
-        f"📂 Текущие категории: {current}\n\n"
+        f"{P.FOLDER} Текущие категории: {current}\n\n"
         "Введите предпочтительные категории через запятую:\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -152,7 +153,7 @@ async def profile_hourly_rate_start(update: Update, context: ContextTypes.DEFAUL
 
     current = profile.hourly_rate if profile and profile.hourly_rate else "Не указана"
     await query.edit_message_text(
-        f"💰 Текущая ставка: {current} руб/час\n\n"
+        f"{P.MONEY} Текущая ставка: {current} руб/час\n\n"
         "Введите ставку в рублях за час (число):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -168,7 +169,7 @@ async def save_hourly_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _update_profile_field(update, "hourly_rate", rate, f"Ставка сохранена: {rate} руб/час")
         return ConversationHandler.END
     except ValueError:
-        await update.message.reply_text("❌ Введите число. Например: 1500")
+        await update.message.reply_text(f"{P.CROSS} Введите число. Например: 1500")
         return ENTERING_HOURLY_RATE
 
 
@@ -183,7 +184,7 @@ async def profile_strong_sides_start(update: Update, context: ContextTypes.DEFAU
 
     current = profile.strong_sides if profile and profile.strong_sides else "Не указаны"
     await query.edit_message_text(
-        f"🌟 Текущие сильные стороны: {current}\n\n"
+        f"{P.SPARKLE} Текущие сильные стороны: {current}\n\n"
         "Введите ваши сильные стороны (кратко, через запятую):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -210,7 +211,7 @@ async def profile_bio_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     current = profile.bio if profile and profile.bio else "Не заполнено"
     await query.edit_message_text(
-        f"📄 Текущее описание: {current}\n\n"
+        f"{P.DOC} Текущее описание: {current}\n\n"
         "Введите краткое описание о себе (для использования в откликах):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -237,7 +238,7 @@ async def profile_portfolio_start(update: Update, context: ContextTypes.DEFAULT_
 
     current = profile.portfolio_url if profile and profile.portfolio_url else "Не указан"
     await query.edit_message_text(
-        f"🔗 Текущее портфолио: {current}\n\n"
+        f"{P.LINK} Текущее портфолио: {current}\n\n"
         "Введите ссылку на портфолио:\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard()
@@ -272,7 +273,7 @@ async def _update_profile_field(
         setattr(profile, field_name, value)
         await queries.save_freelancer_profile(db, profile)
 
-    await update.message.reply_text(f"✅ {success_message}!")
+    await update.message.reply_text(f"{P.CHECK} {success_message}!")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -280,12 +281,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=profile_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=profile_keyboard()
         )
     return ConversationHandler.END

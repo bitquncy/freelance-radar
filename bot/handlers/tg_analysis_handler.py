@@ -8,6 +8,7 @@ from bot.auth import owner_only
 from bot.keyboards import tg_analysis_keyboard, cancel_keyboard
 from db import queries
 from config import DB_PATH
+from emoji_config import P
 
 logger = get_logger(__name__)
 
@@ -19,12 +20,12 @@ ENTERING_CHANNEL_URL, ENTERING_ANALYSIS_TYPE = range(2)
 async def tg_analysis_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show Telegram analysis menu."""
     await update.message.reply_text(
-        "🔍 **Анализ Telegram-каналов/чатов**\n\n"
+        f"{P.SEARCH} **Анализ Telegram-каналов/чатов**\n\n"
         "Выберите действие:\n"
-        "• 📊 Анализ контента канала\n"
-        "• 🎯 Поиск заказов в канале\n"
-        "• 📈 Тренды и активность\n"
-        "• 🤖 AI-анализ вакансий",
+        f"• {P.CHART} Анализ контента канала\n"
+        f"• {P.TARGET} Поиск заказов в канале\n"
+        f"• {P.GRAPH} Тренды и активность\n"
+        f"• {P.ROBOT} AI-анализ вакансий",
         reply_markup=tg_analysis_keyboard(),
         parse_mode=None
     )
@@ -37,7 +38,7 @@ async def analyze_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
 
     await query.edit_message_text(
-        "🔍 **Анализ Telegram-канала**\n\n"
+        f"{P.SEARCH} **Анализ Telegram-канала**\n\n"
         "Введите URL канала (например: @channel_name или https://t.me/channel_name):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard(),
@@ -53,7 +54,7 @@ async def search_jobs_in_channel(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     await query.edit_message_text(
-        "🎯 **Поиск заказов в Telegram-канале**\n\n"
+        f"{P.TARGET} **Поиск заказов в Telegram-канале**\n\n"
         "Введите URL канала (например: @channel_name или https://t.me/channel_name):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard(),
@@ -69,7 +70,7 @@ async def analyze_trends(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
 
     await query.edit_message_text(
-        "📈 **Анализ трендов и активности**\n\n"
+        f"{P.GRAPH} **Анализ трендов и активности**\n\n"
         "Введите URL канала (например: @channel_name или https://t.me/channel_name):\n"
         "Или /cancel для отмены.",
         reply_markup=cancel_keyboard(),
@@ -89,7 +90,7 @@ async def ai_analyze_vacancies(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if not vacancies:
         await query.edit_message_text(
-            "🤖 **AI-анализ вакансий**\n\n"
+            f"{P.ROBOT} **AI-анализ вакансий**\n\n"
             "Нет вакансий из Telegram для анализа.\n"
             "Сначала добавьте Telegram-канал в источники.",
             reply_markup=tg_analysis_keyboard(),
@@ -97,12 +98,12 @@ async def ai_analyze_vacancies(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    text = "🤖 **AI-анализ вакансий из Telegram**\n\n"
+    text = f"{P.ROBOT} **AI-анализ вакансий из Telegram**\n\n"
     for i, vacancy in enumerate(vacancies, 1):
         text += f"{i}. {vacancy.title[:50]}...\n"
-        text += f"   📝 {vacancy.source}\n"
-        text += f"   💰 {vacancy.budget or 'N/A'}\n"
-        text += f"   ⭐ Score: {vacancy.ai_score or 'N/A'}\n\n"
+        text += f"{P.NOTE} {vacancy.source}\n"
+        text += f"{P.MONEY} {vacancy.budget or 'N/A'}\n"
+        text += f"{P.STAR} Score: {vacancy.ai_score or 'N/A'}\n\n"
 
     await query.edit_message_text(text, reply_markup=tg_analysis_keyboard(), parse_mode=None)
 
@@ -114,7 +115,7 @@ async def process_channel_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Parse channel username
     channel = url.replace("https://t.me/", "").replace("t.me/", "").lstrip("@")
 
-    await update.message.reply_text(f"🔍 Анализирую канал @{channel}...")
+    await update.message.reply_text(f"{P.SEARCH} Анализирую канал @{channel}...")
 
     # Import the Telegram source parser
     from parsers.telegram_source import TelegramSourceParser
@@ -126,13 +127,13 @@ async def process_channel_url(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if not vacancies:
             await update.message.reply_text(
-                f"📊 Канал @{channel} не содержит сообщений с заказами.",
+                f"{P.CHART} Канал @{channel} не содержит сообщений с заказами.",
                 reply_markup=tg_analysis_keyboard()
             )
             return ConversationHandler.END
 
         # Analyze the vacancies
-        text = f"📊 **Анализ канала @{channel}**\n\n"
+        text = f"{P.CHART} **Анализ канала @{channel}**\n\n"
         text += f"Найдено сообщений: {len(vacancies)}\n\n"
 
         # Group by category
@@ -210,12 +211,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=tg_analysis_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ Операция отменена.",
+            f"{P.CROSS} Операция отменена.",
             reply_markup=tg_analysis_keyboard()
         )
     return ConversationHandler.END

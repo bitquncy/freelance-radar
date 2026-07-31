@@ -27,34 +27,51 @@ from core.models import (
     User,
     utcnow,
 )
+from emoji_config import E, P, btn_neutral, btn_primary
+
+PRICE = tariffs.PRIMARY_PRICE_RUB
+
+PLAN_FEATURES = (
+    "• Все биржи и безлимит Telegram-каналов\n"
+    "• Безлимит анализов и личный скоринг заказов\n"
+    "• AI-отклики с адаптацией под портфолио (3 варианта тона)\n"
+    "• CRM без лимита клиентов и напоминания по воронке\n"
+    "• Недельный отчёт, экспорт и приоритетное сканирование"
+)
 
 TARIFF_TABLE = (
-    "<b>Тарифы</b>\n"
-    "• Basic — 299 ₽/мес: 1 биржа + до 5 TG-каналов, 50 анализов/мес, "
-    "отклик по шаблону, CRM до 15 клиентов\n"
-    "• Pro — 599 ₽/мес: до 3 бирж + безлимит каналов, безлимит анализов, "
-    "AI-отклики + адаптация портфолио, напоминания, недельный отчёт\n"
-    "• Business — 999 ₽/мес: безлимит источников, варианты тона, команда до 3 мест, "
-    "экспорт, приоритетное сканирование\n\n"
-    "Оплата картой — кнопками ниже (Telegram Payments, не покидая мессенджер)."
+    f"<b>Радар PRO — {PRICE} ₽/мес</b>\n"
+    "Один тариф, всё включено:\n"
+    f"{PLAN_FEATURES}\n\n"
+    f"{E.GIFT} Первые {tariffs.TRIAL_DAYS} дней — бесплатно, без карты.\n"
+    "Оплата картой в Telegram · отмена в любой момент · без автосписаний."
 )
 
 
-def _tariff_keyboard() -> InlineKeyboardMarkup:
-    """Buy buttons for the §7 tiers."""
+def _tariff_keyboard(active: bool = False) -> InlineKeyboardMarkup:
+    """One-button checkout for the single plan (§4.2: minimal friction).
+
+    Подписи — только plain Unicode (:class:`P`): в кнопках HTML не
+    парсится. Цвет — зелёный маркер на главном действии.
+    """
+    pay_label = (
+        btn_primary(f"Продлить за {PRICE} ₽", P.REPEAT)
+        if active
+        else btn_primary(f"Подключить за {PRICE} ₽/мес", P.CARD)
+    )
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    f"💳 {TIER_TITLES[tier]} · {tariffs.PRICES_RUB[tier]} ₽/мес",
-                    callback_data=f"v2sub:buy:{tier.value}",
+                    pay_label,
+                    callback_data=f"v2sub:buy:{tariffs.PRIMARY_TIER.value}",
                 )
-            ]
-            for tier in (
-                SubscriptionTier.BASIC,
-                SubscriptionTier.PRO,
-                SubscriptionTier.BUSINESS,
-            )
+            ],
+            [
+                InlineKeyboardButton(
+                    btn_neutral("В меню", P.BACK), callback_data="v2:menu"
+                )
+            ],
         ]
     )
 
@@ -90,27 +107,51 @@ async def subscription_info(
         quota = (
             f"{used}/{limits.analyses_per_month}"
             if limits.analyses_per_month is not None
-            else f"{used}/безлимит"
+            else f"{used} (безлимит)"
         )
         clients_line = (
             f"{active_clients}/{limits.max_active_clients}"
             if limits.max_active_clients is not None
-            else f"{active_clients}/безлимит"
+            else f"{active_clients} (безлимит)"
         )
+
+    left = tariffs.days_left(user)
+    if tier is None:
+        header = (
+            f"{E.LOCK} <b>Доступ приостановлен</b>\n"
+            "Сканирование и AI-отклики выключены. Ваши данные и CRM целы — "
+            "всё вернётся сразу после оплаты."
+        )
+    elif tier is SubscriptionTier.TRIAL:
+        tail = (
+            f"осталось {left} дн."
+            if left is not None
+            else "без ограничения по сроку"
+        )
+        header = (
+            f"{E.GIFT} <b>Бесплатный период</b> · {tail}\n"
+            "Доступно всё, как в платном тарифе. Карта не нужна."
+        )
+    else:
+        tail = f" · осталось {left} дн." if left is not None else ""
+        header = f"{E.STAR} <b>Радар PRO активен</b>{tail}"
+
     text = (
-        f"⭐ <b>Подписка:</b> {tier_label(user)}\n"
-        f"Анализов в этом месяце: {quota}\n"
-        f"Активных клиентов CRM: {clients_line}\n\n"
+        f"{header}\n"
+        f"<i>Статус:</i> {tier_label(user)}\n"
+        f"<i>Анализов за месяц:</i> {quota}\n"
+        f"<i>Клиентов в CRM:</i> {clients_line}\n\n"
         f"{TARIFF_TABLE}"
     )
+    keyboard = _tariff_keyboard(active=tier is not None and tier is not SubscriptionTier.TRIAL)
     if update.message is not None:
         await update.message.reply_text(
-            text, parse_mode="HTML", reply_markup=_tariff_keyboard()
+            text, parse_mode="HTML", reply_markup=keyboard
         )
     elif update.callback_query is not None:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
-            text, parse_mode="HTML", reply_markup=_tariff_keyboard()
+            text, parse_mode="HTML", reply_markup=keyboard
         )
 
 
@@ -152,6 +193,7 @@ async def grant_subscription(
         now = utcnow()
         user.subscription_tier = tier
         user.subscription_expires_at = now + timedelta(days=days)
+        user.expiry_notified_at = None  # new period → nudge eligible again
         session.add(
             Subscription(
                 user_id=user.id,
@@ -165,7 +207,7 @@ async def grant_subscription(
         )
         await session.commit()
     await update.message.reply_text(
-        f"Выдано: {TIER_TITLES[tier]} на {days} дней для {telegram_id}."
+        f"{P.CHECK} Выдано: {TIER_TITLES[tier]} на {days} дней для {telegram_id}."
     )
 
 
