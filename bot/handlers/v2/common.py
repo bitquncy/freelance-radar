@@ -5,13 +5,13 @@ from typing import Any, MutableMapping, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardMarkup
 from telegram import User as TelegramUser
 from telegram.ext import ContextTypes
 
 from core import tariffs
 from core.models import SubscriptionTier, User
-from emoji_config import E, P, btn_neutral, btn_primary
+from emoji_config import E, P, primary_button, success_button
 
 TIER_TITLES = {
     SubscriptionTier.TRIAL: "Пробный период",
@@ -44,16 +44,15 @@ def paywall_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    btn_primary(
-                        f"Подключить за {tariffs.PRIMARY_PRICE_RUB} ₽/мес", P.CARD
-                    ),
+                success_button(
+                    f"Подключить за {tariffs.PRIMARY_PRICE_RUB} ₽/мес",
+                    icon=P.CARD,
                     callback_data=f"v2sub:buy:{tariffs.PRIMARY_TIER.value}",
                 )
             ],
             [
-                InlineKeyboardButton(
-                    btn_neutral("Что входит", P.INFO), callback_data="v2sub:info"
+                primary_button(
+                    "Что входит", icon=P.INFO, callback_data="v2sub:info"
                 )
             ],
         ]

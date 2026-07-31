@@ -17,11 +17,10 @@ from core.scoring import TrafficLight
 from emoji_config import (
     E,
     P,
-    btn,
-    btn_danger,
-    btn_neutral,
-    btn_primary,
+    danger_button,
     emoji,
+    primary_button,
+    success_button,
 )
 
 SOURCE_TITLES = {
@@ -105,9 +104,8 @@ def project_card_keyboard(project_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    btn_primary("Отклик", P.WRITING),
-                    callback_data=f"v2p:gen:{project_id}",
+                success_button(
+                    "Отклик", icon=P.WRITING, callback_data=f"v2p:gen:{project_id}"
                 ),
                 InlineKeyboardButton(
                     f"{P.PUZZLE} Кейсы под заказ",
@@ -148,9 +146,8 @@ def proposal_keyboard(proposal_id: int, ai_enabled: bool) -> InlineKeyboardMarku
     """Actions under a proposal draft."""
     rows = [
         [
-            InlineKeyboardButton(
-                btn_primary("Отправлено", P.OUTBOX),
-                callback_data=f"v2p:send:{proposal_id}",
+            success_button(
+                "Отправлено", icon=P.OUTBOX, callback_data=f"v2p:send:{proposal_id}"
             ),
             InlineKeyboardButton(
                 f"{P.EDIT} Редактировать",
@@ -185,8 +182,9 @@ def reminder_keyboard(reminder_id: int, client_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    btn_primary("Написать сейчас", P.WRITING),
+                success_button(
+                    "Написать сейчас",
+                    icon=P.WRITING,
                     callback_data=f"v2r:write:{reminder_id}:{client_id}",
                 ),
                 InlineKeyboardButton(
@@ -220,11 +218,15 @@ def client_keyboard(client: Client) -> InlineKeyboardMarkup:
     """Stage-transition buttons limited to §3.7-allowed moves."""
     rows = []
     stage_row = [
-        InlineKeyboardButton(
-            # Проигранный клиент — красный маркер: действие закрывает сделку.
-            btn_danger(STAGE_TITLES[stage], STAGE_EMOJI[stage])
-            if stage is PipelineStage.LOST
-            else btn(STAGE_TITLES[stage], icon=STAGE_EMOJI[stage]),
+        danger_button(
+            STAGE_TITLES[stage],
+            icon=STAGE_EMOJI[stage],
+            callback_data=f"v2c:stage:{client.id}:{stage.value}",
+        )
+        if stage is PipelineStage.LOST
+        else primary_button(
+            STAGE_TITLES[stage],
+            icon=STAGE_EMOJI[stage],
             callback_data=f"v2c:stage:{client.id}:{stage.value}",
         )
         for stage in allowed_next_stages(client.pipeline_stage)
@@ -236,9 +238,7 @@ def client_keyboard(client: Client) -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 f"{P.NOTE} Заметка", callback_data=f"v2c:note:{client.id}"
             ),
-            InlineKeyboardButton(
-                btn_neutral("К списку", P.BACK), callback_data="v2c:list"
-            ),
+            primary_button("К списку", icon=P.BACK, callback_data="v2c:list"),
         ]
     )
     return InlineKeyboardMarkup(rows)

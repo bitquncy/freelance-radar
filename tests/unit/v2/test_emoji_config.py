@@ -22,6 +22,9 @@ from emoji_config import (
     btn_primary,
     check_emoji_config,
     emoji,
+    danger_button,
+    primary_button,
+    success_button,
 )
 
 TAG = "tg-emoji"
@@ -107,6 +110,18 @@ class TestButtonColors:
         """Даже в premium-режиме подпись кнопки остаётся plain."""
         label = premium.btn_primary("Подключить", premium.P.CARD)
         assert TAG not in label
+
+    def test_native_button_styles_and_custom_icons(self) -> None:
+        success = success_button("Подключить", icon=P.CARD, callback_data="buy")
+        primary = primary_button("Назад", icon=P.BACK, callback_data="back")
+        danger = danger_button("Удалить", icon=P.TRASH, callback_data="delete")
+
+        assert success.to_dict()["style"] == "success"
+        assert primary.to_dict()["style"] == "primary"
+        assert danger.to_dict()["style"] == "danger"
+        assert success.to_dict()["icon_custom_emoji_id"] == CUSTOM_EMOJIS[P.CARD]
+        assert success.text == "Подключить"
+        assert TAG not in success.text
 
 
 class TestConfigReport:

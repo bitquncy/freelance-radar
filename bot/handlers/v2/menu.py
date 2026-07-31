@@ -14,7 +14,7 @@ from telegram.ext import BaseHandler, CallbackQueryHandler, CommandHandler, Cont
 
 from bot.handlers.v2.common import get_or_create_user
 from core import crm, tariffs
-from emoji_config import E, P, btn_neutral, btn_primary
+from emoji_config import E, P, primary_button, success_button
 from core.db import get_session_factory
 from core.models import (
     ConnectionStatus,
@@ -56,9 +56,8 @@ def main_menu_keyboard(onboarded: bool = True) -> InlineKeyboardMarkup:
         # Единственное «главное» действие для новичка — зелёный акцент.
         rows.append(
             [
-                InlineKeyboardButton(
-                    btn_primary("Настроить профиль", P.ROCKET),
-                    callback_data="v2:onboard",
+                success_button(
+                    "Настроить профиль", icon=P.ROCKET, callback_data="v2:onboard"
                 )
             ]
         )
@@ -72,12 +71,8 @@ def main_menu_keyboard(onboarded: bool = True) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{P.STAR} Подписка", callback_data="v2sub:info"),
         ],
         [
-            InlineKeyboardButton(
-                btn_neutral("Обновить", P.RELOAD), callback_data="v2:menu"
-            ),
-            InlineKeyboardButton(
-                btn_neutral("Помощь", P.HELP), callback_data="v2:help"
-            ),
+            primary_button("Обновить", icon=P.RELOAD, callback_data="v2:menu"),
+            primary_button("Помощь", icon=P.HELP, callback_data="v2:help"),
         ],
     ]
     return InlineKeyboardMarkup(rows)
@@ -205,11 +200,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Help screen with a way back to the menu."""
     keyboard = InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    btn_neutral("В меню", P.BACK), callback_data="v2:menu"
-                )
-            ]
+            [primary_button("В меню", icon=P.BACK, callback_data="v2:menu")]
         ]
     )
     if update.callback_query is not None:

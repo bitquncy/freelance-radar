@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import List
 
 from sqlalchemy import func, select
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     BaseHandler,
     CallbackQueryHandler,
@@ -27,7 +27,7 @@ from core.models import (
     User,
     utcnow,
 )
-from emoji_config import E, P, btn_neutral, btn_primary
+from emoji_config import E, P, primary_button, success_button
 
 PRICE = tariffs.PRIMARY_PRICE_RUB
 
@@ -54,23 +54,19 @@ def _tariff_keyboard(active: bool = False) -> InlineKeyboardMarkup:
     Подписи — только plain Unicode (:class:`P`): в кнопках HTML не
     парсится. Цвет — зелёный маркер на главном действии.
     """
-    pay_label = (
-        btn_primary(f"Продлить за {PRICE} ₽", P.REPEAT)
-        if active
-        else btn_primary(f"Подключить за {PRICE} ₽/мес", P.CARD)
-    )
+    pay_label = f"Продлить за {PRICE} ₽" if active else f"Подключить за {PRICE} ₽/мес"
+    pay_icon = P.REPEAT if active else P.CARD
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
+                success_button(
                     pay_label,
+                    icon=pay_icon,
                     callback_data=f"v2sub:buy:{tariffs.PRIMARY_TIER.value}",
                 )
             ],
             [
-                InlineKeyboardButton(
-                    btn_neutral("В меню", P.BACK), callback_data="v2:menu"
-                )
+                primary_button("В меню", icon=P.BACK, callback_data="v2:menu")
             ],
         ]
     )
