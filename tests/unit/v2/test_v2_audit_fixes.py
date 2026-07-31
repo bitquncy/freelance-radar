@@ -458,7 +458,11 @@ class TestHealthcheckScript:
         # stray log file in the repo must not influence this test.
         return subprocess.run(
             [sys.executable, str(REPO_ROOT / "scripts" / "healthcheck.py")],
-            env={**os.environ, "DB_PATH": db_path},
+            # AUDIT H-1 regression: without an isolated DATA_DIR the disk
+            # readiness probe defaults to /app/data, which does not exist and
+            # is not writable outside the production container (e.g. CI
+            # runners), making this test fail on an otherwise healthy DB.
+            env={**os.environ, "DB_PATH": db_path, "DATA_DIR": str(cwd)},
             capture_output=True,
             text=True,
             cwd=str(cwd),
