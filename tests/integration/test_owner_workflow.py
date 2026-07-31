@@ -18,6 +18,23 @@ pytestmark = pytest.mark.skipif(not PG_URL, reason="TEST_DATABASE_URL not set â€
 @pytest.fixture(scope="module")
 def seeded_owner(tmp_path_factory: pytest.TempPathFactory) -> tuple[int, str]:
     root = Path(__file__).resolve().parents[2]
+
+    # This file's tests may collect and run before test_postgres_smoke.py
+    # (pytest sorts alphabetically: "owner_workflow" < "postgres_smoke"), so
+    # the schema is not guaranteed to exist yet on a fresh PostgreSQL DB.
+    # Alembic's async env calls asyncio.run(), which cannot execute inside
+    # this already-running test loop â€” run the upgrade in a subprocess, same
+    # approach as test_postgres_smoke.py.
+    migration = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        env={**os.environ, "DATABASE_URL": PG_URL},
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert migration.returncode == 0, migration.stdout + migration.stderr
+
     engine = create_async_engine(PG_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
