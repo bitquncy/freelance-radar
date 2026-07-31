@@ -1,7 +1,7 @@
 """HTML cards and inline keyboards for V2 notifications."""
 from typing import List, Optional
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardMarkup
 
 from bot.handlers.v2.common import esc
 from core.crm import STAGE_TITLES, allowed_next_stages
@@ -107,14 +107,15 @@ def project_card_keyboard(project_id: int) -> InlineKeyboardMarkup:
                 success_button(
                     "Отклик", icon=P.WRITING, callback_data=f"v2p:gen:{project_id}"
                 ),
-                InlineKeyboardButton(
-                    f"{P.PUZZLE} Кейсы под заказ",
+                primary_button(
+                    "Кейсы под заказ",
+                    icon=P.PUZZLE,
                     callback_data=f"v2p:cases:{project_id}",
                 ),
             ],
             [
-                InlineKeyboardButton(
-                    f"{P.HIDE} Скрыть", callback_data=f"v2p:hide:{project_id}"
+                primary_button(
+                    "Скрыть", icon=P.HIDE, callback_data=f"v2p:hide:{project_id}"
                 )
             ],
         ]
@@ -149,8 +150,9 @@ def proposal_keyboard(proposal_id: int, ai_enabled: bool) -> InlineKeyboardMarku
             success_button(
                 "Отправлено", icon=P.OUTBOX, callback_data=f"v2p:send:{proposal_id}"
             ),
-            InlineKeyboardButton(
-                f"{P.EDIT} Редактировать",
+            primary_button(
+                "Редактировать",
+                icon=P.EDIT,
                 callback_data=f"v2p:edit:{proposal_id}",
             ),
         ]
@@ -158,8 +160,9 @@ def proposal_keyboard(proposal_id: int, ai_enabled: bool) -> InlineKeyboardMarku
     if ai_enabled:
         rows.append(
             [
-                InlineKeyboardButton(
-                    f"{P.REPEAT} Ещё вариант",
+                primary_button(
+                    "Ещё вариант",
+                    icon=P.REPEAT,
                     callback_data=f"v2p:regen:{proposal_id}",
                 )
             ]
@@ -187,8 +190,9 @@ def reminder_keyboard(reminder_id: int, client_id: int) -> InlineKeyboardMarkup:
                     icon=P.WRITING,
                     callback_data=f"v2r:write:{reminder_id}:{client_id}",
                 ),
-                InlineKeyboardButton(
-                    f"{P.HOURGLASS} Отложить на сутки",
+                primary_button(
+                    "Отложить на сутки",
+                    icon=P.HOURGLASS,
                     callback_data=f"v2r:snooze:{reminder_id}",
                 ),
             ]
@@ -235,8 +239,8 @@ def client_keyboard(client: Client) -> InlineKeyboardMarkup:
         rows.append(stage_row)
     rows.append(
         [
-            InlineKeyboardButton(
-                f"{P.NOTE} Заметка", callback_data=f"v2c:note:{client.id}"
+            primary_button(
+                "Заметка", icon=P.NOTE, callback_data=f"v2c:note:{client.id}"
             ),
             primary_button("К списку", icon=P.BACK, callback_data="v2c:list"),
         ]

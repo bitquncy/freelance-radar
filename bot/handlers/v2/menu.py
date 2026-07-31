@@ -63,12 +63,12 @@ def main_menu_keyboard(onboarded: bool = True) -> InlineKeyboardMarkup:
         )
     rows += [
         [
-            InlineKeyboardButton(f"{P.RADAR} Источники", callback_data="v2s:menu"),
-            InlineKeyboardButton(f"{P.BRIEFCASE} Портфолио", callback_data="v2pf:menu"),
+            primary_button("Источники", icon=P.RADAR, callback_data="v2s:menu"),
+            primary_button("Портфолио", icon=P.BRIEFCASE, callback_data="v2pf:menu"),
         ],
         [
-            InlineKeyboardButton(f"{P.PEOPLE} Клиенты", callback_data="v2c:list"),
-            InlineKeyboardButton(f"{P.STAR} Подписка", callback_data="v2sub:info"),
+            primary_button("Клиенты", icon=P.PEOPLE, callback_data="v2c:list"),
+            primary_button("Подписка", icon=P.STAR, callback_data="v2sub:info"),
         ],
         [
             primary_button("Обновить", icon=P.RELOAD, callback_data="v2:menu"),

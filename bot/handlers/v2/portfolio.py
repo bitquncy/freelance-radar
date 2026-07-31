@@ -2,7 +2,7 @@
 from typing import List
 
 from sqlalchemy import select
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     BaseHandler,
     CallbackQueryHandler,
@@ -16,7 +16,7 @@ from telegram.ext import (
 from bot.handlers.v2.common import esc, get_or_create_user, pending
 from core.db import get_session_factory
 from core.models import PortfolioItem
-from emoji_config import E, P, btn_danger, btn_neutral, btn_primary
+from emoji_config import E, P, danger_button, primary_button, success_button
 
 P_TITLE, P_DESC, P_TAGS = range(3)
 
@@ -24,28 +24,16 @@ P_TITLE, P_DESC, P_TAGS = range(3)
 def _portfolio_keyboard(items: List[PortfolioItem]) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(
-                # Красный маркер: тап по кейсу удаляет его.
-                btn_danger(item.title[:30], P.TRASH),
-                callback_data=f"v2pf:del:{item.id}",
+            danger_button(
+                item.title[:30], icon=P.TRASH, callback_data=f"v2pf:del:{item.id}"
             )
         ]
         for item in items
     ]
     rows.append(
-        [
-            InlineKeyboardButton(
-                btn_primary("Добавить кейс", P.PLUS), callback_data="v2pf:add"
-            )
-        ]
+        [success_button("Добавить кейс", icon=P.PLUS, callback_data="v2pf:add")]
     )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                btn_neutral("В меню", P.BACK), callback_data="v2:menu"
-            )
-        ]
-    )
+    rows.append([primary_button("В меню", icon=P.BACK, callback_data="v2:menu")])
     return InlineKeyboardMarkup(rows)
 
 

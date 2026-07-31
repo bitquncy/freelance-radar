@@ -2,7 +2,7 @@
 from typing import List
 
 from sqlalchemy import desc, select
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     BaseHandler,
     CallbackQueryHandler,
@@ -15,27 +15,22 @@ from bot.handlers.v2.common import get_or_create_user, pending
 from core import crm
 from core.db import get_session_factory
 from core.models import Client, Interaction, PipelineStage, Reminder
-from emoji_config import E, P, btn_neutral
+from emoji_config import E, P, inline_button, primary_button
 
 
 def _list_keyboard(clients: List[Client]) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(
-                f"{STAGE_EMOJI[c.pipeline_stage]} {c.name[:40]}",
+            inline_button(
+                c.name[:40],
+                icon=STAGE_EMOJI[c.pipeline_stage],
                 callback_data=f"v2c:view:{c.id}",
             )
         ]
         for c in clients[:20]
     ]
     # Always offer a way back — an empty CRM must not be a dead-end screen.
-    rows.append(
-        [
-            InlineKeyboardButton(
-                btn_neutral("В меню", P.BACK), callback_data="v2:menu"
-            )
-        ]
-    )
+    rows.append([primary_button("В меню", icon=P.BACK, callback_data="v2:menu")])
     return InlineKeyboardMarkup(rows)
 
 

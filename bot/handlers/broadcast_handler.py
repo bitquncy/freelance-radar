@@ -1,6 +1,6 @@
 """Broadcast handler for sending messages to chat groups."""
 import aiosqlite
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler,
     CallbackQueryHandler, MessageHandler, filters
@@ -12,7 +12,7 @@ from services.logger_config import get_logger
 from bot.auth import owner_only
 from db import queries
 from config import DB_PATH, OWNER_CHAT_ID
-from emoji_config import P
+from emoji_config import P, danger_button, inline_button, primary_button, success_button
 
 logger = get_logger(__name__)
 
@@ -41,11 +41,11 @@ async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def _main_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(f"{P.PLUS} Создать группу чатов", callback_data="bcast_group_create")],
-        [InlineKeyboardButton(f"{P.LIST} Мои группы", callback_data="bcast_group_list")],
-        [InlineKeyboardButton(f"{P.INBOX} Новая рассылка", callback_data="bcast_send_start")],
-        [InlineKeyboardButton(f"{P.SCROLL} История рассылок", callback_data="bcast_history")],
-        [InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")]
+        [success_button("Создать группу чатов", icon=P.PLUS, callback_data="bcast_group_create")],
+        [primary_button("Мои группы", icon=P.LIST, callback_data="bcast_group_list")],
+        [success_button("Новая рассылка", icon=P.INBOX, callback_data="bcast_send_start")],
+        [primary_button("История рассылок", icon=P.SCROLL, callback_data="bcast_history")],
+        [primary_button("Назад", icon=P.PREV, callback_data="back_to_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -217,13 +217,16 @@ async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         count = len(members)
         text += f"• **{g_name}** (ID: {g_id}) — {count} чатов\n"
         keyboard.append([
-            InlineKeyboardButton(
-                f"{P.EYE} {g_name} ({count})",
-                callback_data=f"bcast_group_detail_{g_id}"
+            inline_button(
+                f"{g_name} ({count})",
+                icon=P.EYE,
+                callback_data=f"bcast_group_detail_{g_id}",
             ),
-            InlineKeyboardButton(f"{P.TRASH}", callback_data=f"bcast_group_delete_{g_id}")
+            danger_button(
+                "Удалить", icon=P.TRASH, callback_data=f"bcast_group_delete_{g_id}"
+            ),
         ])
-    keyboard.append([InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")])
+    keyboard.append([primary_button("Назад", icon=P.PREV, callback_data="back_to_main")])
 
     await query.edit_message_text(
         text,
@@ -266,10 +269,10 @@ async def group_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             text += f"  ... и ещё {len(members) - 20}\n"
 
     keyboard = [
-        [InlineKeyboardButton(f"{P.PLUS} Добавить чат", callback_data=f"bcast_group_add_chat_{group_id}")],
-        [InlineKeyboardButton(f"{P.TRASH} Удалить чат", callback_data=f"bcast_group_remove_chat_{group_id}")],
-        [InlineKeyboardButton(f"{P.EDIT} Переименовать", callback_data=f"bcast_group_rename_{group_id}")],
-        [InlineKeyboardButton(f"{P.PREV} К списку", callback_data="bcast_group_list")],
+        [success_button("Добавить чат", icon=P.PLUS, callback_data=f"bcast_group_add_chat_{group_id}")],
+        [danger_button("Удалить чат", icon=P.TRASH, callback_data=f"bcast_group_remove_chat_{group_id}")],
+        [primary_button("Переименовать", icon=P.EDIT, callback_data=f"bcast_group_rename_{group_id}")],
+        [primary_button("К списку", icon=P.PREV, callback_data="bcast_group_list")],
     ]
 
     await query.edit_message_text(
@@ -324,12 +327,13 @@ async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         async with aiosqlite.connect(DB_PATH) as db:
             members = await queries.get_chat_group_members(db, g_id)
         keyboard.append([
-            InlineKeyboardButton(
+            inline_button(
                 f"{g_name} ({len(members)} чатов)",
-                callback_data=f"bcast_select_group_{g_id}"
+                icon=P.PEOPLE,
+                callback_data=f"bcast_select_group_{g_id}",
             )
         ])
-    keyboard.append([InlineKeyboardButton(f"{P.PREV} Отмена", callback_data="bcast_cancel")])
+    keyboard.append([danger_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")])
 
     await query.edit_message_text(
         text,
@@ -533,7 +537,7 @@ async def broadcast_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         text += f"{status_emoji} {str(b_created)[:16]} — {b_sent} отправлено, {b_failed} ошибок\n"
     text += f"\nВсего: {len(broadcasts)}"
 
-    keyboard.append([InlineKeyboardButton(f"{P.PREV} Назад", callback_data="back_to_main")])
+    keyboard.append([primary_button("Назад", icon=P.PREV, callback_data="back_to_main")])
 
     await query.edit_message_text(
         text,
@@ -566,14 +570,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{P.CROSS} Отмена", callback_data="bcast_cancel")]
+        [danger_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")]
     ])
 
 
 def _confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{P.CHECK} Да, отправить", callback_data="bcast_confirm_yes")],
-        [InlineKeyboardButton(f"{P.CROSS} Отмена", callback_data="bcast_confirm_no")]
+        [success_button("Да, отправить", icon=P.CHECK, callback_data="bcast_confirm_yes")],
+        [danger_button("Отмена", icon=P.CROSS, callback_data="bcast_confirm_no")],
     ])
 
 

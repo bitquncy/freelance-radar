@@ -4,12 +4,12 @@ from typing import List
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import BaseHandler, CallbackQueryHandler, ContextTypes
 
 from bot.handlers.v2.common import esc, get_or_create_user, pending
 from core import tariffs
-from emoji_config import BTN_MUTED, E, P, btn_neutral
+from emoji_config import BTN_MUTED, E, P, danger_button, primary_button, success_button
 from core.models import ConnectionStatus, ExchangeConnection, Platform, User
 from core.db import get_session_factory
 
@@ -28,32 +28,27 @@ def _sources_keyboard(connections: List[ExchangeConnection]) -> InlineKeyboardMa
         title = PLATFORM_TITLES.get(connection.platform, connection.platform.value)
         if connection.platform is Platform.TG_CHANNEL:
             title += f" {connection.settings.get('channel', '')}"
-        # Зелёный = сканируется, серый = отключён; красный — удаление.
         state = P.GREEN if connection.status is ConnectionStatus.ACTIVE else BTN_MUTED
         rows.append(
             [
-                InlineKeyboardButton(
-                    f"{state} {title}", callback_data=f"v2s:toggle:{connection.id}"
+                primary_button(
+                    f"{state} {title}",
+                    icon=P.RADAR,
+                    callback_data=f"v2s:toggle:{connection.id}",
                 ),
-                InlineKeyboardButton(
-                    f"{P.RED} {P.TRASH}", callback_data=f"v2s:del:{connection.id}"
+                danger_button(
+                    "Удалить", icon=P.TRASH, callback_data=f"v2s:del:{connection.id}"
                 ),
             ]
         )
     rows.append(
         [
-            InlineKeyboardButton(f"{P.PLUS} Kwork", callback_data="v2s:add:kwork"),
-            InlineKeyboardButton(f"{P.PLUS} FL.ru", callback_data="v2s:add:fl_ru"),
-            InlineKeyboardButton(f"{P.PLUS} TG-канал", callback_data="v2s:add:tg"),
+            success_button("Kwork", icon=P.PLUS, callback_data="v2s:add:kwork"),
+            success_button("FL.ru", icon=P.PLUS, callback_data="v2s:add:fl_ru"),
+            success_button("TG-канал", icon=P.PLUS, callback_data="v2s:add:tg"),
         ]
     )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                btn_neutral("В меню", P.BACK), callback_data="v2:menu"
-            )
-        ]
-    )
+    rows.append([primary_button("В меню", icon=P.BACK, callback_data="v2:menu")])
     return InlineKeyboardMarkup(rows)
 
 
