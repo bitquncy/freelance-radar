@@ -283,9 +283,6 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sources_enabled ON sources(enabled)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_profile_user ON freelancer_profile(user_id)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcasts_status_scheduled ON broadcasts(status, scheduled_at)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcast_targets_status ON broadcast_targets(broadcast_id, status)")
-
         await db.commit()
         logger.info("Database initialized successfully")
 
