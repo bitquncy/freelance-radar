@@ -1,6 +1,10 @@
 """Unit tests for parsers."""
 
+import json
+from unittest.mock import AsyncMock
+
 import pytest
+from bs4 import BeautifulSoup
 
 from parsers.kwork import KworkParser
 from parsers.telegram_source import TelegramSourceParser
@@ -96,6 +100,117 @@ class TestKworkParser:
         skills = parser._extract_skills(soup)
         assert "Python" in skills
         assert "Django" in skills
+
+    def test_extracts_current_kwork_state_data(self, parser):
+        """Kwork embeds projects into window.stateData instead of DOM cards."""
+        state = {
+            "wantsListData": {
+                "pagination": {
+                    "data": [
+                        {
+                            "id": 3228237,
+                            "name": "Разработка Telegram-бота",
+                            "description": "Нужен бот с PostgreSQL",
+                            "priceLimit": "15000.00",
+                            "max_days": "7",
+                            "kwork_count": 3,
+                            "user": {
+                                "rating": "4,9",
+                                "data": {"wants_count": "12"},
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+        html = (
+            "<script>window.before=true;window.stateData="
+            + json.dumps(state, ensure_ascii=False)
+            + ";window.after=true;</script>"
+        )
+
+        extracted = parser._extract_json_data(BeautifulSoup(html, "html.parser"))
+        cards = parser._parse_state_cards(extracted)
+
+        assert len(cards) == 1
+        assert cards[0]["kwork_id"] == "3228237"
+        assert cards[0]["budget"] == "15000 ₽"
+        assert cards[0]["deadline"] == "7 дней"
+        assert cards[0]["proposals_count"] == 3
+        assert cards[0]["customer_rating"] == 4.9
+        assert cards[0]["customer_orders"] == 12
+        assert cards[0]["_embedded_state"] is True
+
+        vacancy = parser._build_vacancy_from_card(cards[0])
+        assert vacancy is not None
+        assert vacancy.kwork_id == "3228237"
+        assert vacancy.budget_max == 15000
+        assert vacancy.description == "Нужен бот с PostgreSQL"
+
+    async def test_list_page_uses_state_data_without_dom_cards(self, parser):
+        """Regression: the current JS-only list must not return an empty set."""
+        state = {
+            "wantsListData": {
+                "pagination": {
+                    "data": [
+                        {
+                            "id": 123456,
+                            "name": "Новый проект",
+                            "description": "Описание",
+                            "priceLimit": 5000,
+                            "max_days": 2,
+                            "user": {"data": {}},
+                        }
+                    ]
+                }
+            }
+        }
+        page = AsyncMock()
+        page.content.return_value = (
+            "<html><body><div class='js-wants-list-preloaders'></div>"
+            f"<script>window.stateData={json.dumps(state)};</script></body></html>"
+        )
+        context = AsyncMock()
+        context.new_page.return_value = page
+        parser._reserve_request = AsyncMock(return_value=True)
+
+        cards = await parser._fetch_project_cards(context)
+
+        assert [card["kwork_id"] for card in cards] == ["123456"]
+        page.wait_for_selector.assert_awaited_once_with(
+            ".want-card, .js-wants-list-preloaders",
+            state="attached",
+            timeout=20000,
+        )
+        page.close.assert_awaited_once()
+
+    async def test_embedded_cards_skip_redundant_detail_requests(self, parser):
+        """Встроенное полное описание не должно тратить лимит detail-страниц."""
+        card = {
+            "kwork_id": "123456",
+            "url": "https://kwork.ru/projects/123456/view",
+            "title": "Новый проект",
+            "description": "Полное описание из stateData",
+            "budget": "5000 ₽",
+            "deadline": "2 дней",
+            "_embedded_state": True,
+        }
+        context = AsyncMock()
+        browser = AsyncMock()
+        browser.new_context.return_value = context
+        parser._can_make_request = AsyncMock(return_value=True)
+        parser._get_browser = AsyncMock(return_value=browser)
+        parser._fetch_project_cards = AsyncMock(return_value=[card])
+        parser._fetch_detail_from_context = AsyncMock()
+        parser.rate_limiter.sleep = AsyncMock()
+
+        vacancies = await parser.fetch_vacancies()
+
+        assert len(vacancies) == 1
+        assert vacancies[0].description == "Полное описание из stateData"
+        parser._fetch_detail_from_context.assert_not_awaited()
+        parser.rate_limiter.sleep.assert_not_awaited()
+        context.close.assert_awaited_once()
 
     async def test_rate_limiter_status(self, parser):
         """Test rate limiter status."""

@@ -321,7 +321,10 @@ class KworkParser(BaseParser):
                 return []
 
             cards = cards[:limit]
-            detail_count = min(len(cards), self.max_detail_pages)
+            detail_count = min(
+                sum(not card.get("_embedded_state") for card in cards),
+                self.max_detail_pages,
+            )
             logger.info(
                 "kwork.detail_pages_planned",
                 detail_count=detail_count,
@@ -329,18 +332,23 @@ class KworkParser(BaseParser):
             )
 
             vacancies: List[JobVacancy] = []
-            for idx, card in enumerate(cards):
+            details_used = 0
+            for card in cards:
                 try:
                     url = card.get("url")
                     if not url:
                         continue
 
-                    if idx < detail_count:
+                    use_detail = details_used < detail_count and not card.get(
+                        "_embedded_state"
+                    )
+                    if use_detail:
                         vacancy = await self._fetch_detail_from_context(
                             context,
                             url,
                             basic_info=card,
                         )
+                        details_used += 1
                     else:
                         vacancy = self._build_vacancy_from_card(card)
 
@@ -351,10 +359,11 @@ class KworkParser(BaseParser):
                             kwork_id=vacancy.kwork_id,
                             title=vacancy.title[:60],
                             budget=vacancy.budget,
-                            has_detail=(idx < detail_count),
+                            has_detail=use_detail,
                         )
 
-                    await self.rate_limiter.sleep()
+                    if use_detail:
+                        await self.rate_limiter.sleep()
                 except (
                     PlaywrightError,
                     ValueError,
@@ -445,16 +454,23 @@ class KworkParser(BaseParser):
             await page.goto(KWORK_PROJECTS_URL, wait_until="networkidle")
             try:
                 await page.wait_for_selector(
-                    ".want-card", state="attached", timeout=20000
+                    ".want-card, .js-wants-list-preloaders",
+                    state="attached",
+                    timeout=20000,
                 )
             except PlaywrightTimeout:
-                logger.warning("kwork.wait_for_cards_timeout")
+                logger.warning("kwork.wait_for_list_shell_timeout")
             content = await page.content()
             soup = BeautifulSoup(content, "html.parser")
             if self._is_blocked(soup):
                 logger.error("kwork.blocked_or_captcha_list")
                 await self._save_html_for_debug(page, "blocked_list")
                 return []
+
+            state_cards = self._parse_state_cards(self._extract_json_data(soup))
+            if state_cards:
+                logger.info("kwork.state_cards_found", count=len(state_cards))
+                return state_cards
 
             card_elements = soup.find_all("div", class_="want-card")
             logger.info("kwork.raw_cards_found", count=len(card_elements))
@@ -602,25 +618,134 @@ class KworkParser(BaseParser):
     # -----------------------------------------------------------------------
     @staticmethod
     def _extract_json_data(soup: BeautifulSoup) -> Optional[dict]:
-        """Try to extract inline JSON data (e.g. __INITIAL_STATE__, __DATA__)."""
+        """Извлечь встроенное JSON-состояние без выполнения JavaScript.
+
+        Актуальный список проектов Kwork рендерится на клиенте из
+        ``window.stateData``. Прежние страницы использовали переменные вида
+        ``__INITIAL_STATE__``; они сохранены как совместимый fallback.
+        """
+        decoder = json.JSONDecoder()
         scripts = soup.find_all("script")
         for script in scripts:
             if not script.string:
                 continue
             text = script.string
-            for pattern in [
-                r"window\.__INITIAL_STATE__\s*=\s*({.+?});?\s*$",
-                r"window\.__DATA__\s*=\s*({.+?});?\s*$",
-                r"window\.__PROJECT__\s*=\s*({.+?});?\s*$",
+            for variable in (
+                "window.stateData",
+                "window.__INITIAL_STATE__",
+                "window.__DATA__",
+                "window.__PROJECT__",
+            ):
+                match = re.search(rf"{re.escape(variable)}\s*=\s*", text)
+                if match is None:
+                    continue
+                payload = text[match.end() :].lstrip()
+                try:
+                    value, _ = decoder.raw_decode(payload)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    continue
+                if isinstance(value, dict):
+                    return value
+
+            config_match = re.search(
                 r"window\.config\s*=\s*Object\.assign\(config,\s*({.+?})\)",
-            ]:
-                match = re.search(pattern, text, re.DOTALL)
-                if match:
-                    try:
-                        return json.loads(match.group(1))
-                    except (json.JSONDecodeError, ValueError):
-                        continue
+                text,
+                re.DOTALL,
+            )
+            if config_match:
+                try:
+                    value = json.loads(config_match.group(1))
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    continue
+                if isinstance(value, dict):
+                    return value
         return None
+
+    def _parse_state_cards(self, state: Optional[dict]) -> List[dict]:
+        """Преобразовать ``window.stateData`` в прежний формат карточек."""
+        if not isinstance(state, dict):
+            return []
+        wants_data = state.get("wantsListData")
+        if not isinstance(wants_data, dict):
+            return []
+        pagination = wants_data.get("pagination")
+        if not isinstance(pagination, dict):
+            return []
+        rows = pagination.get("data")
+        if not isinstance(rows, list):
+            return []
+
+        cards: List[dict] = []
+        seen_ids: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_id = row.get("id")
+            title = row.get("name")
+            if raw_id is None or not isinstance(title, str) or not title.strip():
+                continue
+            kwork_id = str(raw_id)
+            if not kwork_id.isdigit() or kwork_id in seen_ids:
+                continue
+
+            price = row.get("priceLimit")
+            if price in (None, ""):
+                price = row.get("possiblePriceLimit")
+            budget = self._format_state_budget(price)
+
+            max_days = self._safe_int(row.get("max_days"))
+            user = row.get("user") if isinstance(row.get("user"), dict) else {}
+            user_data = user.get("data") if isinstance(user.get("data"), dict) else {}
+            seen_ids.add(kwork_id)
+            cards.append(
+                {
+                    "kwork_id": kwork_id,
+                    "url": urljoin(self.base_url, f"/projects/{kwork_id}/view"),
+                    "title": title.strip(),
+                    "description": str(row.get("description") or "").strip(),
+                    "budget": budget,
+                    "deadline": f"{max_days} дней" if max_days else None,
+                    "category": None,
+                    "subcategory": None,
+                    "proposals_count": self._safe_int(row.get("kwork_count")),
+                    "customer_rating": self._safe_float(user.get("rating")),
+                    "customer_orders": self._safe_int(user_data.get("wants_count")),
+                    "_embedded_state": True,
+                }
+            )
+        return cards
+
+    @staticmethod
+    def _format_state_budget(value: Any) -> Optional[str]:
+        """Нормализовать числовой бюджет из stateData для общих экстракторов."""
+        if value in (None, "") or isinstance(value, bool):
+            return None
+        try:
+            number = float(str(value).replace(" ", "").replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        if number <= 0:
+            return None
+        rendered = str(int(number)) if number.is_integer() else f"{number:g}"
+        return f"{rendered} ₽"
+
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        if value in (None, "") or isinstance(value, bool):
+            return None
+        try:
+            return int(float(str(value).replace(" ", "").replace(",", ".")))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        if value in (None, "") or isinstance(value, bool):
+            return None
+        try:
+            return float(str(value).replace(" ", "").replace(",", "."))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _deep_search(data: Any, keys: List[str], expected_type: type) -> Optional[Any]:
@@ -742,8 +867,8 @@ class KworkParser(BaseParser):
             budget_max=budget_max,
             deadline=card.get("deadline"),
             deadline_days=deadline_days,
-            category=None,
-            subcategory=None,
+            category=card.get("category"),
+            subcategory=card.get("subcategory"),
             skills=None,
             proposals_count=card.get("proposals_count"),
             customer_rating=card.get("customer_rating"),
