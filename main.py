@@ -28,6 +28,7 @@ from bot.auth import owner_only
 from config import BOT_TOKEN, MONITOR_INTERVAL_MINUTES, validate_config
 from bot.keyboards import (
     MAIN_MENU_BUTTONS,
+    MENU_BROADCAST,
     MENU_HELP,
     MENU_JOBS,
     MENU_PROFILE,
@@ -119,6 +120,10 @@ async def handle_menu_buttons(
         await profile_menu(update, context)
     elif text == MENU_HELP:
         await help_command(update, context)
+    elif text == MENU_BROADCAST:
+        from bot.handlers.broadcast_handler import broadcast_menu
+
+        await broadcast_menu(update, context)
 
 
 @owner_only
@@ -215,17 +220,20 @@ def main() -> None:
     if config.ENVIRONMENT.casefold() == "production":
         if config.DATABASE_URL.startswith("sqlite"):
             raise RuntimeError("Production DATABASE_URL must use PostgreSQL")
+        if not config.REDIS_URL:
+            raise RuntimeError(
+                "Production REDIS_URL is required for broadcast/FSM safety"
+            )
         if config.BOT_REPLICAS != 1:
             raise RuntimeError(
-                "Local PicklePersistence requires BOT_REPLICAS=1; shared FSM is not configured"
+                "Telegram polling and scheduled jobs require BOT_REPLICAS=1"
             )
-    if v2_enabled:
-        # Alembic (not create_all): records alembic_version so future
-        # schema migrations apply cleanly on SQLite and PostgreSQL alike.
-        from core.db import run_v2_migrations
+    # Broadcast groups and queue now share the SQLAlchemy/PostgreSQL schema,
+    # therefore Alembic is required even when the legacy UI is enabled.
+    from core.db import run_v2_migrations
 
-        run_v2_migrations()
-        logger.info("v2.db_migrated")
+    run_v2_migrations()
+    logger.info("database.migrated")
 
     # Один лимитер охватывает рассылки, карточки, CRM и ответы хендлеров.
     # Локальные ограничения broadcast остаются дополнительным предохранителем.
@@ -242,12 +250,15 @@ def main() -> None:
             )
         )
     )
-    if v2_enabled:
-        # Survive container restarts mid-conversation (onboarding, portfolio
-        # add, pending edit/note inputs live in user_data).
+    if config.REDIS_URL:
+        from services.redis_persistence import RedisPersistence
+
+        builder = builder.persistence(RedisPersistence(config.REDIS_URL))
+    else:
+        # Development-only fallback. Production validation above requires Redis.
+        import os as _os
         from pathlib import Path as _Path
 
-        import os as _os
         from telegram.ext import PicklePersistence
 
         state_dir = _Path(_os.environ.get("PTB_STATE_DIR", "data"))
@@ -256,14 +267,7 @@ def main() -> None:
             PicklePersistence(filepath=str(state_dir / "ptb_state.pickle"))
         )
 
-        async def _v2_post_shutdown(app: Application) -> None:
-            """Release V2 resources (PTB restores its own signal handling)."""
-            from core.db import dispose_engine
-            from core.llm import aclose_shared_llm_client
-
-            await aclose_shared_llm_client()
-            await dispose_engine()
-            logger.info("v2.resources_released")
+    if v2_enabled:
 
         async def _v2_post_init(app: Application) -> None:
             """Publish the ☰ command menu once the bot is initialized."""
@@ -272,21 +276,41 @@ def main() -> None:
             await publish_bot_commands(app)
 
         builder = builder.post_init(_v2_post_init)
-        builder = builder.post_shutdown(_v2_post_shutdown)
+
+    async def _post_shutdown(app: Application) -> None:
+        """Release shared database, LLM and Redis limiter resources."""
+        from core.db import dispose_engine
+        from core.llm import aclose_shared_llm_client
+
+        runner = app.bot_data.get("broadcast_runner")
+        if runner is not None:
+            await runner.close()
+        if v2_enabled:
+            await aclose_shared_llm_client()
+        await dispose_engine()
+        logger.info("application.resources_released")
+
+    builder = builder.post_shutdown(_post_shutdown)
     application = builder.build()
 
     # Durable Bot API broadcast queue. It is intentionally separate from the
     # read-only Telethon monitoring session required by AGENTS.md §8.
     from services.broadcast import BroadcastRepository, BroadcastRunner
+    from services.broadcast.rate_limiter import build_broadcast_limiter
+
+    broadcast_limiter = build_broadcast_limiter(
+        config.REDIS_URL, config.BROADCAST_RATE_LIMIT
+    )
 
     broadcast_runner = BroadcastRunner(
         bot=application.bot,
-        repository=BroadcastRepository(config.DB_PATH),
+        repository=BroadcastRepository(),
         rate_limit=config.BROADCAST_RATE_LIMIT,
         batch_size=config.BROADCAST_BATCH_SIZE,
         max_retries=config.BROADCAST_MAX_RETRIES,
         progress_interval=config.BROADCAST_PROGRESS_INTERVAL,
         min_chat_interval_sec=config.BROADCAST_MIN_CHAT_INTERVAL_SEC,
+        rate_limiter=broadcast_limiter,
     )
     application.bot_data["broadcast_runner"] = broadcast_runner
 

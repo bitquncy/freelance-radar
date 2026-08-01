@@ -18,6 +18,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.models import (
+    BroadcastCampaign,
+    BroadcastGroup,
+    BroadcastRecipient,
+    BroadcastTarget,
     Client,
     ExchangeConnection,
     Interaction,
@@ -113,6 +117,44 @@ async def _collect(session, user_id: int) -> dict[str, list[dict]]:
         .scalars()
         .all()
     )
+    broadcast_groups = list(
+        await session.scalars(
+            select(BroadcastGroup).where(
+                BroadcastGroup.owner_telegram_id == user.telegram_id
+            )
+        )
+    )
+    broadcast_group_ids = [group.id for group in broadcast_groups]
+    broadcast_recipients = (
+        list(
+            await session.scalars(
+                select(BroadcastRecipient).where(
+                    BroadcastRecipient.group_id.in_(broadcast_group_ids)
+                )
+            )
+        )
+        if broadcast_group_ids
+        else []
+    )
+    broadcast_campaigns = list(
+        await session.scalars(
+            select(BroadcastCampaign).where(
+                BroadcastCampaign.owner_telegram_id == user.telegram_id
+            )
+        )
+    )
+    broadcast_ids = [campaign.id for campaign in broadcast_campaigns]
+    broadcast_targets = (
+        list(
+            await session.scalars(
+                select(BroadcastTarget).where(
+                    BroadcastTarget.broadcast_id.in_(broadcast_ids)
+                )
+            )
+        )
+        if broadcast_ids
+        else []
+    )
 
     connection_ids = [connection.id for connection in connections]
     referenced_project_ids = {
@@ -161,6 +203,10 @@ async def _collect(session, user_id: int) -> dict[str, list[dict]]:
             .scalars()
             .all()
         ],
+        "broadcast_groups": [as_dict(item) for item in broadcast_groups],
+        "broadcast_recipients": [as_dict(item) for item in broadcast_recipients],
+        "broadcast_campaigns": [as_dict(item) for item in broadcast_campaigns],
+        "broadcast_targets": [as_dict(item) for item in broadcast_targets],
     }
 
 

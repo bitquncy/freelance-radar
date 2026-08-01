@@ -1,28 +1,27 @@
-"""Админский UX безопасной рассылки по разрешённым чатам."""
+"""Админский UX безопасной рассылки по разрешённым Telegram-чатам."""
 
 from __future__ import annotations
 
-import aiosqlite
+import re
 from datetime import datetime
+from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import telegram
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
-    CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     filters,
 )
 
-import telegram
-
-from services.logger_config import get_logger
-from services.broadcast.repository import BroadcastRepository
 from bot.auth import owner_only
-from db import queries
-from config import BROADCAST_TIMEZONE, DB_PATH, OWNER_CHAT_ID
+from config import BROADCAST_TIMEZONE, OWNER_CHAT_ID
 from emoji_config import (
     P,
     danger_button,
@@ -31,616 +30,719 @@ from emoji_config import (
     primary_button,
     success_button,
 )
+from services.broadcast.repository import BroadcastRepository, GroupRecord
+from services.logger_config import get_logger
 
 logger = get_logger(__name__)
 
-# Conversation states
 (
     ENTERING_GROUP_NAME,
-    SELECTING_GROUP_FOR_BROADCAST,
-    ENTERING_BROADCAST_MESSAGE,
-    CONFIRMING_BROADCAST,
-    ADDING_CHAT_ID,
+    ADDING_CHAT,
+    SELECTING_GROUP,
+    SELECTING_FILTERS,
+    ENTERING_MESSAGE,
+    COLLECTING_ALBUM,
+    CHOOSING_BUTTONS,
+    ENTERING_BUTTONS,
+    CONFIRMING,
     ENTERING_SCHEDULE,
-) = range(6)
+) = range(10)
+
+_DRAFT_KEYS = (
+    "broadcast_group_id",
+    "broadcast_filters",
+    "broadcast_source_chat_id",
+    "broadcast_source_message_ids",
+    "broadcast_content_type",
+    "broadcast_media_group_id",
+    "broadcast_reply_markup",
+)
 
 
-# ─── Main menu ───────────────────────────────────────────────────────
+def _repository() -> BroadcastRepository:
+    return BroadcastRepository()
 
 
 @owner_only
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show broadcast main menu."""
+    """Открыть админский раздел рассылок."""
+    if update.message is None:
+        return
     await update.message.reply_text(
-        f"{P.MEGAPHONE} **Рассылка сообщений**\n\n"
+        f"{P.MEGAPHONE} Рассылка сообщений\n\n"
         "Только чаты, где бот уже имеет право публиковать. "
-        "Автопоиск и вступление в чужие группы отключены.\n\n"
-        "Выберите действие:",
+        "Автопоиск и вступление в чужие группы отключены.",
         reply_markup=_main_keyboard(),
-        parse_mode=None,
     )
 
 
 def _main_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
+    return InlineKeyboardMarkup(
         [
-            success_button(
-                "Создать группу чатов", icon=P.PLUS, callback_data="bcast_group_create"
-            )
-        ],
-        [primary_button("Мои группы", icon=P.LIST, callback_data="bcast_group_list")],
-        [
-            success_button(
-                "Новая рассылка", icon=P.INBOX, callback_data="bcast_send_start"
-            )
-        ],
-        [
-            primary_button(
-                "История рассылок", icon=P.SCROLL, callback_data="bcast_history"
-            )
-        ],
-        [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ─── Group CRUD ──────────────────────────────────────────────────────
+            [
+                success_button(
+                    "Создать группу чатов",
+                    icon=P.PLUS,
+                    callback_data="bcast_group_create",
+                )
+            ],
+            [
+                primary_button(
+                    "Мои группы", icon=P.LIST, callback_data="bcast_group_list"
+                )
+            ],
+            [
+                success_button(
+                    "Новая рассылка",
+                    icon=P.INBOX,
+                    callback_data="bcast_send_start",
+                )
+            ],
+            [
+                primary_button(
+                    "История рассылок",
+                    icon=P.SCROLL,
+                    callback_data="bcast_history",
+                )
+            ],
+            [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")],
+        ]
+    )
 
 
 @owner_only
 async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start creating a new chat group."""
     query = update.callback_query
     await query.answer()
-
     await query.edit_message_text(
-        f"{P.PLUS} **Новая группа чатов**\n\n"
-        'Введите название группы (например: "Дизайн-каналы"):\n\n'
-        "/cancel — отмена",
-        reply_markup=_cancel_kb(),
-        parse_mode=None,
+        "Новая группа чатов\n\nВведите название (1–100 символов):",
+        reply_markup=_cancel_keyboard(),
     )
     return ENTERING_GROUP_NAME
 
 
 @owner_only
 async def save_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save group name."""
-    name = update.message.text.strip()
-
-    if len(name) > 100:
-        await update.message.reply_text(
-            f"{P.CROSS} Название слишком длинное (макс 100 символов)."
-        )
+    name = (update.message.text or "").strip()
+    if not 1 <= len(name) <= 100:
+        await update.message.reply_text("Название должно содержать 1–100 символов.")
         return ENTERING_GROUP_NAME
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        group_id = await queries.create_chat_group(db, OWNER_CHAT_ID, name)
-
-    await update.message.reply_text(
-        f"{P.CHECK} Группа «{name}» создана (ID: {group_id})\n\n"
-        "Теперь добавьте чаты в группу. Отправьте:\n"
-        "• Chat ID (например: `-1002006920508`)\n"
-        "• @username канала (например: `@freelance_chat`)\n"
-        "• URL канала (например: `https://t.me/freelance_chat`)\n\n"
-        "/done — завершить добавление\n"
-        "/cancel — отмена",
-        reply_markup=_cancel_kb(),
-    )
+    try:
+        group_id = await _repository().create_group(OWNER_CHAT_ID, name)
+    except IntegrityError:
+        await update.message.reply_text("Группа с таким названием уже есть.")
+        return ENTERING_GROUP_NAME
     context.user_data["current_group_id"] = group_id
-    return ADDING_CHAT_ID
+    await update.message.reply_text(
+        f"Группа «{name}» создана.\n\n"
+        "Присылайте chat_id, @username или https://t.me/username.\n"
+        "/done — завершить.",
+        reply_markup=_cancel_keyboard(),
+    )
+    return ADDING_CHAT
 
 
 @owner_only
-async def add_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Add a chat ID to the current group."""
-    chat_id = update.message.text.strip()
+async def add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     group_id = context.user_data.get("current_group_id")
-
     if not group_id:
-        await update.message.reply_text(f"{P.CROSS} Группа не найдена. Начните заново.")
+        await update.message.reply_text("Группа не найдена. Начните заново.")
         return ConversationHandler.END
-
-    # Разрешаем только чаты, в которых Telegram подтверждает право бота писать.
-    resolved = await _resolve_authorized_chat(chat_id, context)
-
-    if not resolved:
+    resolved = await _resolve_authorized_chat(update.message.text or "", context)
+    if resolved is None:
         await update.message.reply_text(
-            f"{P.CROSS} Не удалось подтвердить право публикации в `{chat_id}`.\n"
-            "Сначала добавьте бота в чат. Для канала выдайте ему права администратора, "
-            "для группы — право отправлять сообщения.\n"
-            "Или /done для завершения.",
-            parse_mode=None,
+            "Не удалось подтвердить право публикации. "
+            "Добавьте бота и выдайте ему права, затем повторите."
         )
-        return ADDING_CHAT_ID
-    resolved_id, resolved_title = resolved
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        try:
-            await queries.add_chat_to_group(db, group_id, resolved_id, resolved_title)
-            await update.message.reply_text(
-                f"{P.CHECK} Чат `{resolved_id}` (original: {chat_id}) добавлен в группу.\n"
-                "Отправьте следующий ID или /done.",
-                parse_mode=None,
-            )
-        except (aiosqlite.Error, ValueError, TypeError, KeyError) as e:
-            await update.message.reply_text(
-                f"{P.CROSS} Ошибка: {e}\nПопробуйте другой ID или /done."
-            )
-
-    return ADDING_CHAT_ID
+        return ADDING_CHAT
+    saved = await _repository().add_recipient(
+        group_id=int(group_id),
+        owner_telegram_id=OWNER_CHAT_ID,
+        **resolved,
+    )
+    if not saved:
+        await update.message.reply_text("Группа не найдена.")
+        return ConversationHandler.END
+    await update.message.reply_text(
+        f"Чат {resolved['title'] or resolved['chat_id']} добавлен. "
+        "Пришлите следующий или /done."
+    )
+    return ADDING_CHAT
 
 
-async def _resolve_authorized_chat(text: str, context) -> tuple[str, str] | None:
-    """Разрешить идентификатор и подтвердить право бота публиковать."""
-    import re
-
+async def _resolve_authorized_chat(
+    text: str, context: ContextTypes.DEFAULT_TYPE
+) -> dict[str, Any] | None:
     text = text.strip()
-
-    candidate = text
-    url_match = re.match(r"https?://t\.me/([^/]+)", text)
-    if url_match:
-        username = url_match.group(1)
-        candidate = username if username.startswith("@") else f"@{username}"
-    elif not re.match(r"^-?\d+$", text) and not text.startswith("@"):
+    match = re.fullmatch(r"https?://t\.me/([^/?#]+).*", text)
+    candidate = f"@{match.group(1).lstrip('@')}" if match else text
+    if not re.fullmatch(r"-?\d+|@[A-Za-z0-9_]{5,}", candidate):
         return None
-
     try:
         chat = await context.bot.get_chat(candidate)
         membership = await context.bot.get_chat_member(chat.id, context.bot.id)
     except (telegram.error.TelegramError, ValueError, TypeError) as exc:
         logger.warning("broadcast.resolve_failed", reference=text, error=str(exc))
         return None
-
-    status = str(membership.status)
+    status = getattr(membership.status, "value", str(membership.status))
+    chat_type = getattr(chat.type, "value", str(chat.type))
     if status in {"left", "kicked"}:
         return None
-    if str(chat.type) == "channel" and status not in {
-        "administrator",
-        "creator",
-        "owner",
-    }:
+    if chat_type == "channel" and status not in {"administrator", "creator", "owner"}:
         return None
     if status == "restricted" and not bool(
         getattr(membership, "can_send_messages", False)
     ):
         return None
-    title = chat.title or chat.full_name or chat.username or str(chat.id)
-    return str(chat.id), str(title)
+    member_user = getattr(membership, "user", None)
+    return {
+        "chat_id": int(chat.id),
+        "chat_type": chat_type,
+        "title": chat.title or chat.full_name or chat.username or str(chat.id),
+        "username": chat.username,
+        "language_code": getattr(member_user, "language_code", None),
+    }
 
 
 @owner_only
-async def add_chat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Добавить разрешённый чат в существующую группу."""
-    query = update.callback_query
-    await query.answer()
-    group_id = int(query.data.replace("bcast_group_add_chat_", ""))
-    context.user_data["current_group_id"] = group_id
-    await query.edit_message_text(
-        "Пришлите chat_id, @username или ссылку на чат.\n\n"
-        "Бот уже должен состоять в нём и иметь право отправлять сообщения.\n"
-        "/done — завершить · /cancel — отмена",
-        reply_markup=_cancel_kb(),
-    )
-    return ADDING_CHAT_ID
-
-
-@owner_only
-async def done_adding_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Finish adding chats to the group."""
-    group_id = context.user_data.get("current_group_id")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        members = await queries.get_chat_group_members(db, group_id)
-
+async def done_adding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    group_id = context.user_data.pop("current_group_id", None)
+    members = await _repository().list_recipients(int(group_id)) if group_id else []
     await update.message.reply_text(
-        f"{P.CHECK} Группа готова! Чатов: {len(members)}\n\n" "Выберите действие:",
+        f"Группа готова. Активных чатов: {len(members)}.",
         reply_markup=_main_keyboard(),
     )
-
-    context.user_data.pop("current_group_id", None)
     return ConversationHandler.END
 
 
 @owner_only
 async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all chat groups."""
     query = update.callback_query
     await query.answer()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        groups = await queries.get_chat_groups(db, OWNER_CHAT_ID)
-
+    groups = await _repository().list_groups(OWNER_CHAT_ID)
     if not groups:
-        await query.edit_message_text(
-            f"{P.LIST} **Мои группы**\n\n" "Групп пока нет. Создайте первую!",
-            reply_markup=_main_keyboard(),
-            parse_mode=None,
-        )
+        await query.edit_message_text("Групп пока нет.", reply_markup=_main_keyboard())
         return
-
-    text = f"{P.LIST} **Мои группы чатов:**\n\n"
-    keyboard = []
-    for g in groups:
-        # g is a tuple: (id, user_id, name, created_at)
-        g_id = g[0]
-        g_name = g[2]
-        # Get member count
-        async with aiosqlite.connect(DB_PATH) as db:
-            members = await queries.get_chat_group_members(db, g_id)
-        count = len(members)
-        text += f"• **{g_name}** (ID: {g_id}) — {count} чатов\n"
-        keyboard.append(
+    rows = []
+    lines = ["Мои группы:"]
+    repository = _repository()
+    for group in groups:
+        count = len(await repository.list_recipients(group.id))
+        lines.append(f"• {group.name}: {count}")
+        rows.append(
             [
                 inline_button(
-                    f"{g_name} ({count})",
+                    f"{group.name} ({count})",
                     icon=P.EYE,
-                    callback_data=f"bcast_group_detail_{g_id}",
+                    callback_data=f"bcast_group_detail_{group.id}",
                 ),
                 danger_button(
-                    "Удалить", icon=P.TRASH, callback_data=f"bcast_group_delete_{g_id}"
+                    "Удалить",
+                    icon=P.TRASH,
+                    callback_data=f"bcast_group_delete_{group.id}",
                 ),
             ]
         )
-    keyboard.append(
-        [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")]
-    )
-
+    rows.append([neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")])
     await query.edit_message_text(
-        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
+        "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows)
     )
 
 
 @owner_only
 async def group_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show group details."""
     query = update.callback_query
     await query.answer()
-
-    group_id = int(query.data.replace("bcast_group_detail_", ""))
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        members = await queries.get_chat_group_members(db, group_id)
-        group = await queries.get_chat_group(db, group_id)
-
-    if not group:
-        await query.edit_message_text(f"{P.CROSS} Группа не найдена.")
+    group_id = int(query.data.removeprefix("bcast_group_detail_"))
+    repository = _repository()
+    group = await repository.get_group(group_id, OWNER_CHAT_ID)
+    if group is None:
+        await query.edit_message_text("Группа не найдена.")
         return
-
-    # group is a tuple: (id, user_id, name, created_at)
-    group_id = group[0]
-    group_name = group[2]
-
-    text = f"{P.EYE} **Группа: {group_name}**\n\n"
-    text += f"ID: {group_id}\n"
-    text += f"Чатов: {len(members)}\n\n"
-
-    if members:
-        text += "**Чаты:**\n"
-        for m in members[:20]:
-            # m is a tuple: (id, group_id, chat_id, chat_title, added_at)
-            m_title = m[3] or m[2]
-            text += f"  • {m_title}\n"
-        if len(members) > 20:
-            text += f"  ... и ещё {len(members) - 20}\n"
-
-    keyboard = [
-        [
-            success_button(
-                "Добавить чат",
-                icon=P.PLUS,
-                callback_data=f"bcast_group_add_chat_{group_id}",
-            )
-        ],
-        [neutral_button("К списку", icon=P.PREV, callback_data="bcast_group_list")],
-    ]
-
+    members = await repository.list_recipients(group_id)
+    lines = [f"Группа: {group.name}", f"Чатов: {len(members)}", ""]
+    lines.extend(
+        f"• {member.title or member.chat_id} [{member.chat_type}]"
+        for member in members[:20]
+    )
     await query.edit_message_text(
-        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    success_button(
+                        "Добавить чат",
+                        icon=P.PLUS,
+                        callback_data=f"bcast_group_add_chat_{group.id}",
+                    )
+                ],
+                [
+                    primary_button(
+                        "К списку", icon=P.PREV, callback_data="bcast_group_list"
+                    )
+                ],
+            ]
+        ),
     )
 
 
 @owner_only
-async def group_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Delete a chat group."""
+async def add_chat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-
-    group_id = int(query.data.replace("bcast_group_delete_", ""))
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await queries.delete_chat_group(db, group_id)
-
+    group_id = int(query.data.removeprefix("bcast_group_add_chat_"))
+    if await _repository().get_group(group_id, OWNER_CHAT_ID) is None:
+        await query.edit_message_text("Группа не найдена.")
+        return ConversationHandler.END
+    context.user_data["current_group_id"] = group_id
     await query.edit_message_text(
-        f"{P.CHECK} Группа удалена.", reply_markup=_main_keyboard()
+        "Пришлите chat_id, @username или ссылку. /done — завершить.",
+        reply_markup=_cancel_keyboard(),
     )
+    return ADDING_CHAT
 
 
-# ─── Sending ─────────────────────────────────────────────────────────
+@owner_only
+async def delete_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    group_id = int(query.data.removeprefix("bcast_group_delete_"))
+    try:
+        deleted = await _repository().delete_group(group_id, OWNER_CHAT_ID)
+    except IntegrityError:
+        await query.edit_message_text(
+            "Группа уже использовалась в рассылке и сохранена для истории.",
+            reply_markup=_main_keyboard(),
+        )
+        return
+    await query.edit_message_text(
+        "Группа удалена." if deleted else "Группа не найдена.",
+        reply_markup=_main_keyboard(),
+    )
 
 
 @owner_only
 async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start broadcast: select a group."""
     query = update.callback_query
     await query.answer()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        groups = await queries.get_chat_groups(db, OWNER_CHAT_ID)
-
+    groups = await _repository().list_groups(OWNER_CHAT_ID)
     if not groups:
         await query.edit_message_text(
-            f"{P.CROSS} Нет групп для рассылки.\n" "Сначала создайте группу чатов.",
-            reply_markup=_main_keyboard(),
+            "Сначала создайте группу чатов.", reply_markup=_main_keyboard()
         )
         return ConversationHandler.END
-
-    text = f"{P.INBOX} **Выберите группу чатов для рассылки:**\n\n"
-    keyboard = []
-    for g in groups:
-        # g is a tuple: (id, user_id, name, created_at)
-        g_id = g[0]
-        g_name = g[2]
-        async with aiosqlite.connect(DB_PATH) as db:
-            members = await queries.get_chat_group_members(db, g_id)
-        keyboard.append(
-            [
-                inline_button(
-                    f"{g_name} ({len(members)} чатов)",
-                    icon=P.PEOPLE,
-                    callback_data=f"bcast_select_group_{g_id}",
-                )
-            ]
-        )
-    keyboard.append(
-        [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")]
-    )
-
+    rows = [
+        [
+            inline_button(
+                group.name,
+                icon=P.PEOPLE,
+                callback_data=f"bcast_select_group_{group.id}",
+            )
+        ]
+        for group in groups
+    ]
+    rows.append([neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")])
     await query.edit_message_text(
-        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
+        "Выберите ручной сегмент:", reply_markup=InlineKeyboardMarkup(rows)
     )
-    return SELECTING_GROUP_FOR_BROADCAST
+    return SELECTING_GROUP
 
 
 @owner_only
 async def group_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Group selected, ask for message."""
     query = update.callback_query
     await query.answer()
-
-    group_id = int(query.data.replace("bcast_select_group_", ""))
+    group_id = int(query.data.removeprefix("bcast_select_group_"))
+    group = await _repository().get_group(group_id, OWNER_CHAT_ID)
+    if group is None:
+        await query.edit_message_text("Группа не найдена.")
+        return ConversationHandler.END
     context.user_data["broadcast_group_id"] = group_id
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        group = await queries.get_chat_group(db, group_id)
-        members = await queries.get_chat_group_members(db, group_id)
-
-    # group is a tuple: (id, user_id, name, created_at)
-    group_name = group[2] if group else "Unknown"
-    await query.edit_message_text(
-        f"{P.INBOX} **Группа: {group_name}** ({len(members)} чатов)\n\n"
-        "Отправьте сообщение для рассылки.\n"
-        "Поддерживается копирование текста, фото, видео, документа и других "
-        "обычных сообщений без метки «переслано».\n\n"
-        "/cancel — отмена",
-        reply_markup=_cancel_kb(),
-        parse_mode=None,
-    )
-    return ENTERING_BROADCAST_MESSAGE
+    context.user_data["broadcast_filters"] = {"chat_types": [], "languages": []}
+    return await _render_filters(query, group, context)
 
 
 @owner_only
-async def receive_broadcast_message(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
-    """Receive broadcast message and show preview."""
-    message = update.message
-    context.user_data["broadcast_source_chat_id"] = message.chat_id
-    context.user_data["broadcast_source_message_id"] = message.message_id
-
-    text = f"{P.LIST} **Предпросмотр — сообщение выше**\n\n"
-    if message.text:
-        text += f"Тип: текст ({len(message.text)} символов)\n"
-    elif message.photo:
-        text += f"{P.CAMERA} Тип: фото\n"
-    elif message.video:
-        text += "🎬 Тип: видео\n"
-    elif message.document:
-        text += f"{P.DOC} Тип: документ\n"
-    else:
-        text += "Тип: копирование исходного сообщения\n"
-
+async def change_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
     group_id = context.user_data.get("broadcast_group_id")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        group = await queries.get_chat_group(db, group_id)
-        members = await queries.get_chat_group_members(db, group_id)
-
-    # group is a tuple: (id, user_id, name, created_at)
-    group_name = group[2] if group else "Unknown"
-    text += f"\n{P.TARGET} Группа: {group_name} ({len(members)} чатов)\n"
-    text += (
-        "\nБудет использован безопасный Bot API. Получатели фиксируются при запуске, "
-        "а повтор в один чат ограничен кулдауном."
+    group = (
+        await _repository().get_group(int(group_id), OWNER_CHAT_ID)
+        if group_id
+        else None
     )
-
-    await update.message.reply_text(
-        text, reply_markup=_confirm_keyboard(), parse_mode=None
+    if group is None:
+        await query.edit_message_text("Группа не найдена.")
+        return ConversationHandler.END
+    action = query.data.removeprefix("bcast_filter_")
+    current = context.user_data.setdefault(
+        "broadcast_filters", {"chat_types": [], "languages": []}
     )
-    return CONFIRMING_BROADCAST
+    if action.startswith("type_"):
+        value = action.removeprefix("type_")
+        current["chat_types"] = [] if value == "all" else _chat_type_values(value)
+    elif action.startswith("lang_"):
+        value = action.removeprefix("lang_")
+        current["languages"] = [] if value == "all" else [value]
+    elif action == "done":
+        count = await _repository().count_recipients(group.id, current)
+        if count == 0:
+            await query.answer("Под фильтр не попало ни одного чата.", show_alert=True)
+            return SELECTING_FILTERS
+        await query.answer()
+        await query.edit_message_text(
+            f"Получателей: {count}.\n\n"
+            "Пришлите текст, фото, видео, документ или альбом."
+        )
+        return ENTERING_MESSAGE
+    await query.answer()
+    return await _render_filters(query, group, context)
+
+
+async def _render_filters(
+    query: Any, group: GroupRecord, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    current = context.user_data["broadcast_filters"]
+    count = await _repository().count_recipients(group.id, current)
+    types = current.get("chat_types") or []
+    languages = current.get("languages") or []
+    selected_type = (
+        "private"
+        if types == ["private"]
+        else (
+            "group"
+            if set(types) == {"group", "supergroup"}
+            else "channel" if types == ["channel"] else "all"
+        )
+    )
+    selected_language = languages[0] if len(languages) == 1 else "all"
+
+    def mark(label: str, value: str, selected: str) -> str:
+        return f"✓ {label}" if value == selected else label
+
+    rows = [
+        [
+            primary_button(
+                mark("Все типы", "all", selected_type),
+                callback_data="bcast_filter_type_all",
+            ),
+            primary_button(
+                mark("Личные", "private", selected_type),
+                callback_data="bcast_filter_type_private",
+            ),
+        ],
+        [
+            primary_button(
+                mark("Группы", "group", selected_type),
+                callback_data="bcast_filter_type_group",
+            ),
+            primary_button(
+                mark("Каналы", "channel", selected_type),
+                callback_data="bcast_filter_type_channel",
+            ),
+        ],
+        [
+            primary_button(
+                mark("Любой язык", "all", selected_language),
+                callback_data="bcast_filter_lang_all",
+            ),
+            primary_button(
+                mark("RU", "ru", selected_language),
+                callback_data="bcast_filter_lang_ru",
+            ),
+            primary_button(
+                mark("EN", "en", selected_language),
+                callback_data="bcast_filter_lang_en",
+            ),
+        ],
+        [
+            success_button(
+                f"Далее · {count}", icon=P.CHECK, callback_data="bcast_filter_done"
+            )
+        ],
+        [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")],
+    ]
+    await query.edit_message_text(
+        f"Сегмент: {group.name}\nВыберите тип чата и язык:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return SELECTING_FILTERS
+
+
+def _chat_type_values(value: str) -> list[str]:
+    if value == "group":
+        return ["group", "supergroup"]
+    return [value]
+
+
+@owner_only
+async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.message
+    if message is None:
+        return ENTERING_MESSAGE
+    context.user_data["broadcast_source_chat_id"] = message.chat_id
+    if message.media_group_id:
+        context.user_data["broadcast_media_group_id"] = message.media_group_id
+        context.user_data["broadcast_source_message_ids"] = [message.message_id]
+        context.user_data["broadcast_content_type"] = "media_group"
+        await message.reply_text(
+            "Альбом принимаю. Когда все файлы загрузятся, нажмите /done."
+        )
+        return COLLECTING_ALBUM
+    context.user_data["broadcast_source_message_ids"] = [message.message_id]
+    context.user_data["broadcast_content_type"] = "copy"
+    return await _choose_buttons(message, context)
+
+
+@owner_only
+async def collect_album(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.message
+    if message is None or message.media_group_id != context.user_data.get(
+        "broadcast_media_group_id"
+    ):
+        await update.effective_message.reply_text(
+            "Дождитесь загрузки текущего альбома и нажмите /done."
+        )
+        return COLLECTING_ALBUM
+    ids = context.user_data.setdefault("broadcast_source_message_ids", [])
+    if message.message_id not in ids:
+        ids.append(message.message_id)
+    return COLLECTING_ALBUM
+
+
+@owner_only
+async def finish_album(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    ids = context.user_data.get("broadcast_source_message_ids") or []
+    if not 2 <= len(ids) <= 10:
+        await update.message.reply_text(
+            f"В альбоме собрано {len(ids)} элементов; нужно от 2 до 10."
+        )
+        return COLLECTING_ALBUM
+    ids.sort()
+    return await _choose_buttons(update.message, context)
+
+
+async def _choose_buttons(message: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await message.reply_text(
+        "Добавить URL-кнопки?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    success_button(
+                        "Добавить", icon=P.PLUS, callback_data="bcast_buttons_add"
+                    )
+                ],
+                [primary_button("Без кнопок", callback_data="bcast_buttons_skip")],
+                [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")],
+            ]
+        ),
+    )
+    return CHOOSING_BUTTONS
+
+
+@owner_only
+async def choose_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data == "bcast_buttons_add":
+        await query.edit_message_text(
+            "Пришлите до 8 кнопок, каждую с новой строки:\n"
+            "Текст | https://example.com"
+        )
+        return ENTERING_BUTTONS
+    context.user_data["broadcast_reply_markup"] = None
+    return await _show_preview(query.message, context)
+
+
+@owner_only
+async def receive_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        context.user_data["broadcast_reply_markup"] = _parse_buttons(
+            update.message.text or ""
+        )
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return ENTERING_BUTTONS
+    return await _show_preview(update.message, context)
+
+
+def _parse_buttons(text: str) -> list[list[dict[str, str]]]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not 1 <= len(lines) <= 8:
+        raise ValueError("Укажите от 1 до 8 кнопок.")
+    rows: list[list[dict[str, str]]] = []
+    for line in lines:
+        label, separator, url = line.partition("|")
+        label = label.strip()
+        url = url.strip()
+        parsed = urlparse(url)
+        if not separator or not 1 <= len(label) <= 64:
+            raise ValueError("Формат кнопки: Текст | https://example.com")
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Допустимы только полные HTTP/HTTPS-ссылки.")
+        rows.append([{"text": label, "url": url}])
+    return rows
+
+
+async def _show_preview(message: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
+    group_id = int(context.user_data["broadcast_group_id"])
+    current_filters = context.user_data["broadcast_filters"]
+    count = await _repository().count_recipients(group_id, current_filters)
+    ids = context.user_data.get("broadcast_source_message_ids") or []
+    content = "медиагруппа" if len(ids) > 1 else "копия сообщения"
+    buttons = context.user_data.get("broadcast_reply_markup") or []
+    await message.reply_text(
+        f"Предпросмотр\n\nТип: {content}\n"
+        f"Элементов: {len(ids)}\nURL-кнопок: {len(buttons)}\n"
+        f"Получателей: {count}\n\nПроверьте исходное сообщение выше.",
+        reply_markup=_confirm_keyboard(),
+    )
+    return CONFIRMING
 
 
 @owner_only
 async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Поставить рассылку в очередь или перейти к выбору времени."""
     query = update.callback_query
     await query.answer()
-
     if query.data == "bcast_confirm_schedule":
         await query.edit_message_text(
-            f"Введите дату и время запуска в часовом поясе {BROADCAST_TIMEZONE}.\n"
-            "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n\n"
-            "/cancel — отмена",
-            reply_markup=_cancel_kb(),
+            f"Введите время в {BROADCAST_TIMEZONE}: ДД.ММ.ГГГГ ЧЧ:ММ"
         )
         return ENTERING_SCHEDULE
     if query.data == "bcast_confirm_now":
-        return await _enqueue_broadcast(update, context, scheduled_at=None)
-    if query.data in {"bcast_confirm_no", "bcast_cancel"}:
-        await query.edit_message_text(
-            f"{P.CROSS} Рассылка отменена.", reply_markup=_main_keyboard()
-        )
-        _clear_broadcast_draft(context)
-        return ConversationHandler.END
-    return CONFIRMING_BROADCAST
+        return await _enqueue(update, context, None)
+    await query.edit_message_text("Рассылка отменена.", reply_markup=_main_keyboard())
+    _clear_draft(context)
+    return ConversationHandler.END
 
 
 @owner_only
 async def receive_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Разобрать локальное время отложенного запуска."""
     try:
         timezone_info = ZoneInfo(BROADCAST_TIMEZONE)
-        local_value = datetime.strptime(update.message.text.strip(), "%d.%m.%Y %H:%M")
-        scheduled_at = local_value.replace(tzinfo=timezone_info)
+        value = datetime.strptime((update.message.text or "").strip(), "%d.%m.%Y %H:%M")
+        scheduled_at = value.replace(tzinfo=timezone_info)
     except (ValueError, ZoneInfoNotFoundError):
-        await update.message.reply_text(
-            "Не удалось разобрать время. Используйте формат ДД.ММ.ГГГГ ЧЧ:ММ, "
-            f"часовой пояс {BROADCAST_TIMEZONE}."
-        )
+        await update.message.reply_text("Неверный формат. Пример: 31.12.2026 18:30")
         return ENTERING_SCHEDULE
     if scheduled_at <= datetime.now(timezone_info):
-        await update.message.reply_text("Время запуска должно быть в будущем.")
+        await update.message.reply_text("Время должно быть в будущем.")
         return ENTERING_SCHEDULE
-    return await _enqueue_broadcast(update, context, scheduled_at=scheduled_at)
+    return await _enqueue(update, context, scheduled_at)
 
 
-async def _enqueue_broadcast(
+async def _enqueue(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    *,
     scheduled_at: datetime | None,
 ) -> int:
-    """Создать снимок аудитории и передать кампанию фоновому воркеру."""
-    group_id = context.user_data.get("broadcast_group_id")
-    source_chat_id = context.user_data.get("broadcast_source_chat_id")
-    source_message_id = context.user_data.get("broadcast_source_message_id")
-    progress_message = (
-        update.callback_query.message if update.callback_query else update.message
-    )
-    if not group_id or source_chat_id is None or source_message_id is None:
-        await progress_message.reply_text(
-            f"{P.CROSS} Черновик рассылки потерян. Начните заново."
+    message = update.callback_query.message if update.callback_query else update.message
+    try:
+        broadcast_id, total = await _repository().create_broadcast(
+            owner_telegram_id=OWNER_CHAT_ID,
+            group_id=int(context.user_data["broadcast_group_id"]),
+            source_chat_id=int(context.user_data["broadcast_source_chat_id"]),
+            source_message_ids=list(context.user_data["broadcast_source_message_ids"]),
+            content_type=str(context.user_data["broadcast_content_type"]),
+            reply_markup=context.user_data.get("broadcast_reply_markup"),
+            filters=dict(context.user_data["broadcast_filters"]),
+            progress_chat_id=message.chat_id,
+            progress_message_id=message.message_id,
+            scheduled_at=scheduled_at,
         )
-        _clear_broadcast_draft(context)
+    except (KeyError, TypeError, ValueError, SQLAlchemyError) as exc:
+        logger.exception("broadcast.enqueue_failed")
+        await message.reply_text(f"Не удалось создать рассылку: {type(exc).__name__}")
+        _clear_draft(context)
         return ConversationHandler.END
-
-    repository = BroadcastRepository(DB_PATH)
-    broadcast_id, total = await repository.create_broadcast(
-        user_id=OWNER_CHAT_ID,
-        group_id=int(group_id),
-        source_chat_id=source_chat_id,
-        source_message_id=int(source_message_id),
-        progress_chat_id=progress_message.chat_id,
-        progress_message_id=progress_message.message_id,
-        scheduled_at=scheduled_at,
+    text = (
+        f"Рассылка #{broadcast_id} запланирована. Получателей: {total}."
+        if scheduled_at
+        else f"Рассылка #{broadcast_id} поставлена в очередь. Получателей: {total}."
     )
-    if scheduled_at:
-        text = (
-            f"🗓 Рассылка #{broadcast_id} запланирована на "
-            f"{scheduled_at.strftime('%d.%m.%Y %H:%M')} ({BROADCAST_TIMEZONE}).\n"
-            f"Получателей: {total}"
-        )
-    else:
-        text = (
-            f"📣 Рассылка #{broadcast_id} поставлена в очередь.\nПолучателей: {total}"
-        )
-
     if update.callback_query:
         await update.callback_query.edit_message_text(text)
     else:
-        await update.message.reply_text(text)
-        # Прогресс должен редактировать только что созданное сообщение, а не ввод времени.
-        progress = await update.message.reply_text(
-            f"⏳ Ожидание запуска рассылки #{broadcast_id}…"
-        )
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "UPDATE broadcasts SET progress_message_id = ? WHERE id = ?",
-                (progress.message_id, broadcast_id),
-            )
-            await db.commit()
-
+        progress = await update.message.reply_text(text)
+        await _repository().set_progress_message(broadcast_id, progress.message_id)
     runner = context.application.bot_data.get("broadcast_runner")
     if runner is not None and scheduled_at is None:
         context.application.create_task(runner.run_due())
-    _clear_broadcast_draft(context)
+    _clear_draft(context)
     return ConversationHandler.END
-
-
-# ─── History ─────────────────────────────────────────────────────────
 
 
 @owner_only
 async def broadcast_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show broadcast history."""
     query = update.callback_query
     await query.answer()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        broadcasts = await queries.get_broadcast_history(db, OWNER_CHAT_ID)
-
-    if not broadcasts:
+    campaigns = await _repository().history(OWNER_CHAT_ID)
+    if not campaigns:
         await query.edit_message_text(
-            f"{P.SCROLL} **История рассылок**\n\n" "Рассылок пока нет.",
-            reply_markup=_main_keyboard(),
-            parse_mode=None,
+            "Рассылок пока нет.", reply_markup=_main_keyboard()
         )
         return
-
-    text = f"{P.SCROLL} **История рассылок:**\n\n"
-    keyboard = []
-    for b in broadcasts[:20]:
-        # b is a tuple: (id, user_id, group_id, message_text, message_type, file_id, caption, sent_count, failed_count, status, created_at)
-        b_status = b[9]
-        b_created = b[10]
-        b_sent = b[7]
-        b_failed = b[8]
-        status_emoji = (
-            f"{P.CHECK}" if b_status in {"completed", "done"} else f"{P.HOURGLASS}"
+    lines = ["Последние рассылки:", ""]
+    for campaign in campaigns:
+        lines.append(
+            f"#{campaign.id} · {campaign.status.value} · "
+            f"{campaign.sent_count}/{campaign.total_count} · "
+            f"{campaign.created_at:%d.%m %H:%M}"
         )
-        text += f"{status_emoji} {str(b_created)[:16]} — {b_sent} отправлено, {b_failed} ошибок\n"
-    text += f"\nВсего: {len(broadcasts)}"
+    await query.edit_message_text("\n".join(lines), reply_markup=_main_keyboard())
 
-    keyboard.append(
-        [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")]
+
+@owner_only
+async def control_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    action, raw_id = query.data.removeprefix("bcast_").split("_", maxsplit=1)
+    target_status = {"pause": "paused", "resume": "queued", "stop": "cancelled"}[action]
+    changed = await _repository().set_status(int(raw_id), target_status)
+    await query.answer(
+        (
+            {
+                "pause": "Рассылка на паузе.",
+                "resume": "Рассылка продолжена.",
+                "stop": "Рассылка остановлена.",
+            }[action]
+            if changed
+            else "Статус уже изменён."
+        ),
+        show_alert=not changed,
     )
-
-    await query.edit_message_text(
-        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
-    )
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────
+    runner = context.application.bot_data.get("broadcast_runner")
+    if changed and runner is not None:
+        context.application.create_task(runner.run_due())
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel the conversation."""
-    _clear_broadcast_draft(context)
+    _clear_draft(context)
     context.user_data.pop("current_group_id", None)
-
+    message = update.callback_query.message if update.callback_query else update.message
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(
-            f"{P.CROSS} Операция отменена.", reply_markup=_main_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            f"{P.CROSS} Операция отменена.", reply_markup=_main_keyboard()
+    await message.reply_text("Действие отменено.", reply_markup=_main_keyboard())
+    return ConversationHandler.END
+
+
+async def conversation_timeout(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    _clear_draft(context)
+    context.user_data.pop("current_group_id", None)
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "Черновик рассылки закрыт после 15 минут бездействия."
         )
     return ConversationHandler.END
 
 
-def _cancel_kb() -> InlineKeyboardMarkup:
+def _clear_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for key in _DRAFT_KEYS:
+        context.user_data.pop(key, None)
+
+
+def _cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")]]
     )
@@ -666,96 +768,77 @@ def _confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _clear_broadcast_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Удалить временные ссылки на исходное сообщение рассылки."""
-    for key in (
-        "broadcast_group_id",
-        "broadcast_source_chat_id",
-        "broadcast_source_message_id",
-    ):
-        context.user_data.pop(key, None)
-
-
-@owner_only
-async def control_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Поставить кампанию на паузу, продолжить или отменить."""
-    query = update.callback_query
-    action, raw_id = query.data.removeprefix("bcast_").split("_", maxsplit=1)
-    broadcast_id = int(raw_id)
-    target_status = {
-        "pause": "paused",
-        "resume": "queued",
-        "stop": "cancelled",
-    }[action]
-    changed = await BroadcastRepository(DB_PATH).set_status(broadcast_id, target_status)
-    if not changed:
-        await query.answer(
-            "Статус уже изменён или рассылка завершена.", show_alert=True
-        )
-        return
-    labels = {
-        "pause": "Рассылка поставлена на паузу.",
-        "resume": "Рассылка продолжена.",
-        "stop": "Рассылка остановлена.",
-    }
-    await query.answer(labels[action])
-    runner = context.application.bot_data.get("broadcast_runner")
-    if runner is not None:
-        context.application.create_task(runner.run_due())
-
-
 def get_broadcast_handler() -> ConversationHandler:
-    """Get the broadcast conversation handler."""
+    """Собрать Redis-persistent FSM с 15-минутным timeout."""
     return ConversationHandler(
         entry_points=[
             CommandHandler("broadcast", broadcast_menu),
-            CallbackQueryHandler(create_group_start, pattern="^bcast_group_create$"),
-            CallbackQueryHandler(add_chat_start, pattern="^bcast_group_add_chat_"),
-            CallbackQueryHandler(send_start, pattern="^bcast_send_start$"),
+            CallbackQueryHandler(create_group_start, pattern=r"^bcast_group_create$"),
+            CallbackQueryHandler(add_chat_start, pattern=r"^bcast_group_add_chat_\d+$"),
+            CallbackQueryHandler(send_start, pattern=r"^bcast_send_start$"),
         ],
         states={
             ENTERING_GROUP_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, save_group_name)
             ],
-            ADDING_CHAT_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_chat_id),
-                CommandHandler("done", done_adding_chats),
+            ADDING_CHAT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_chat),
+                CommandHandler("done", done_adding),
             ],
-            SELECTING_GROUP_FOR_BROADCAST: [
-                CallbackQueryHandler(group_selected, pattern="^bcast_select_group_")
+            SELECTING_GROUP: [
+                CallbackQueryHandler(
+                    group_selected, pattern=r"^bcast_select_group_\d+$"
+                )
             ],
-            ENTERING_BROADCAST_MESSAGE: [
-                MessageHandler(
-                    filters.ALL & ~filters.COMMAND, receive_broadcast_message
-                ),
+            SELECTING_FILTERS: [
+                CallbackQueryHandler(change_filters, pattern=r"^bcast_filter_")
             ],
-            CONFIRMING_BROADCAST: [
-                CallbackQueryHandler(confirm_broadcast, pattern="^bcast_confirm_")
+            ENTERING_MESSAGE: [
+                MessageHandler(filters.ALL & ~filters.COMMAND, receive_message)
+            ],
+            COLLECTING_ALBUM: [
+                MessageHandler(filters.ALL & ~filters.COMMAND, collect_album),
+                CommandHandler("done", finish_album),
+            ],
+            CHOOSING_BUTTONS: [
+                CallbackQueryHandler(
+                    choose_buttons, pattern=r"^bcast_buttons_(?:add|skip)$"
+                )
+            ],
+            ENTERING_BUTTONS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_buttons)
+            ],
+            CONFIRMING: [
+                CallbackQueryHandler(confirm_broadcast, pattern=r"^bcast_confirm_")
             ],
             ENTERING_SCHEDULE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_schedule)
             ],
+            ConversationHandler.TIMEOUT: [
+                MessageHandler(filters.ALL, conversation_timeout),
+                CallbackQueryHandler(conversation_timeout),
+            ],
         },
         fallbacks=[
-            CallbackQueryHandler(cancel, pattern="^bcast_cancel$"),
+            CallbackQueryHandler(cancel, pattern=r"^bcast_cancel$"),
             CommandHandler("cancel", cancel),
         ],
         per_user=True,
         per_chat=True,
         name="broadcast_conversation",
+        persistent=True,
         conversation_timeout=15 * 60,
     )
 
 
-def get_broadcast_handlers() -> list:
-    """Вернуть conversation и самостоятельные callback-хендлеры раздела."""
+def get_broadcast_handlers() -> list[Any]:
     return [
         get_broadcast_handler(),
-        CallbackQueryHandler(list_groups, pattern="^bcast_group_list$"),
-        CallbackQueryHandler(group_detail, pattern="^bcast_group_detail_"),
-        CallbackQueryHandler(group_delete, pattern="^bcast_group_delete_"),
-        CallbackQueryHandler(broadcast_history, pattern="^bcast_history$"),
+        CallbackQueryHandler(list_groups, pattern=r"^bcast_group_list$"),
+        CallbackQueryHandler(group_detail, pattern=r"^bcast_group_detail_\d+$"),
+        CallbackQueryHandler(delete_group, pattern=r"^bcast_group_delete_\d+$"),
+        CallbackQueryHandler(broadcast_history, pattern=r"^bcast_history$"),
         CallbackQueryHandler(
-            control_broadcast, pattern="^bcast_(?:pause|resume|stop)_\\d+$"
+            control_broadcast, pattern=r"^bcast_(?:pause|resume|stop)_\d+$"
         ),
     ]

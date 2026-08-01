@@ -3,7 +3,8 @@
 Registered only when ``RADAR_V2_ENABLED`` is on — the legacy single-owner
 bot behavior is untouched by default (AGENTS.md §12.4: scope discipline).
 """
-from telegram import BotCommand
+
+from telegram import BotCommand, BotCommandScopeChat
 from telegram.ext import Application
 
 from emoji_config import P
@@ -34,6 +35,13 @@ async def publish_bot_commands(application: Application) -> None:
 
     try:
         await application.bot.set_my_commands(BOT_COMMANDS)
+        from config import OWNER_CHAT_ID
+
+        await application.bot.set_my_commands(
+            BOT_COMMANDS
+            + [BotCommand("broadcast", f"{P.MEGAPHONE} Рассылка по чатам")],
+            scope=BotCommandScopeChat(OWNER_CHAT_ID),
+        )
     except Exception as exc:  # noqa: BLE001 - cosmetic feature, log and go on
         get_logger(__name__).warning("v2.set_commands_failed", error=str(exc))
 

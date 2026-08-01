@@ -15,6 +15,7 @@ from services.broadcast.repository import (
     BroadcastRepository,
     TargetRecord,
 )
+from services.broadcast.rate_limiter import BroadcastRateLimiter
 from services.broadcast.sender import BroadcastSender, GlobalPauseGate
 from services.logger_config import get_logger
 
@@ -34,6 +35,7 @@ class BroadcastRunner:
         max_retries: int,
         progress_interval: int,
         min_chat_interval_sec: int,
+        rate_limiter: BroadcastRateLimiter,
     ) -> None:
         self.bot = bot
         self.repository = repository
@@ -41,12 +43,14 @@ class BroadcastRunner:
         self.batch_size = max(1, min(batch_size, self.rate_limit))
         self.progress_interval = max(5, progress_interval)
         self.min_chat_interval_sec = max(60, min_chat_interval_sec)
+        self.rate_limiter = rate_limiter
         self.pause_gate = GlobalPauseGate()
         self.sender = BroadcastSender(
             bot=bot,
             repository=repository,
             max_retries=max_retries,
             pause_gate=self.pause_gate,
+            rate_limiter=rate_limiter,
         )
         self._run_lock = asyncio.Lock()
         self._recovered = False
@@ -61,7 +65,9 @@ class BroadcastRunner:
                 recovered = await self.repository.recover_uncertain_targets()
                 self._recovered = True
                 if recovered:
-                    logger.warning("broadcast.uncertain_targets_skipped", count=recovered)
+                    logger.warning(
+                        "broadcast.uncertain_targets_skipped", count=recovered
+                    )
 
             for broadcast_id in await self.repository.due_broadcast_ids():
                 try:
@@ -91,14 +97,19 @@ class BroadcastRunner:
             batch = await self.repository.claim_targets(broadcast_id, self.batch_size)
             if not batch:
                 counts = await self.repository.finish(broadcast_id)
-                await self._update_progress(broadcast, force=True, final=True, counts=counts)
+                await self._update_progress(
+                    broadcast, force=True, final=True, counts=counts
+                )
                 return
 
             started = time.monotonic()
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *(self._send_if_allowed(broadcast, target) for target in batch),
-                return_exceptions=False,
+                return_exceptions=True,
             )
+            for target, result in zip(batch, results):
+                if isinstance(result, BaseException):
+                    await self._isolate_batch_exception(target, result)
             await self.repository.sync_counts(broadcast_id)
             await self._update_progress(broadcast)
 
@@ -122,7 +133,7 @@ class BroadcastRunner:
         cutoff = datetime.now(timezone.utc) - timedelta(
             seconds=self.min_chat_interval_sec
         )
-        if await self.repository.was_sent_recently(target.chat_id, cutoff.isoformat()):
+        if await self.repository.was_sent_recently(target.chat_id, cutoff):
             await self.repository.target_failed(
                 target,
                 status="skipped",
@@ -136,6 +147,31 @@ class BroadcastRunner:
             )
             return "skipped"
         return await self.sender.send(broadcast, target)
+
+    async def _isolate_batch_exception(
+        self, target: TargetRecord, exc: BaseException
+    ) -> None:
+        """Зафиксировать сбой одного target и продолжить batch."""
+        logger.error(
+            "broadcast.target_task_failed",
+            broadcast_id=target.broadcast_id,
+            chat_id=target.chat_id,
+            error_type=type(exc).__name__,
+            exc_info=exc,
+        )
+        try:
+            await self.repository.target_failed(
+                target,
+                status="failed",
+                error_code="target_task_failed",
+                error_message=str(exc),
+            )
+        except Exception:  # noqa: BLE001 - кампания должна продолжиться
+            logger.exception(
+                "broadcast.target_task_persist_failed",
+                broadcast_id=target.broadcast_id,
+                chat_id=target.chat_id,
+            )
 
     async def _update_progress(
         self,
@@ -172,7 +208,11 @@ class BroadcastRunner:
             f"⏭ Пропущено: {counts['skipped']}\n"
             f"⏱ Длительность: {elapsed} сек."
         )
-        reply_markup = None if final or status in {"done", "cancelled", "failed"} else self._controls(broadcast.id, status)
+        reply_markup = (
+            None
+            if final or status in {"done", "cancelled", "failed"}
+            else self._controls(broadcast.id, status)
+        )
         try:
             await self.bot.edit_message_text(
                 chat_id=broadcast.progress_chat_id,
@@ -205,17 +245,25 @@ class BroadcastRunner:
                 "⏸ Пауза", callback_data=f"bcast_pause_{broadcast_id}"
             )
         return InlineKeyboardMarkup(
-            [[first, InlineKeyboardButton("⏹ Стоп", callback_data=f"bcast_stop_{broadcast_id}")]]
+            [
+                [
+                    first,
+                    InlineKeyboardButton(
+                        "⏹ Стоп", callback_data=f"bcast_stop_{broadcast_id}"
+                    ),
+                ]
+            ]
         )
 
     @staticmethod
-    def _elapsed_seconds(started_at: str | None) -> int:
+    def _elapsed_seconds(started_at: datetime | None) -> int:
         if not started_at:
             return 0
-        try:
-            started = datetime.fromisoformat(started_at)
-            if started.tzinfo is None:
-                started = started.replace(tzinfo=timezone.utc)
-            return max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
-        except ValueError:
-            return 0
+        started = started_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+
+    async def close(self) -> None:
+        """Закрыть соединение Redis rate limiter."""
+        await self.rate_limiter.close()

@@ -17,4 +17,5 @@ pydantic-settings==2.1.0
 SQLAlchemy==2.0.31
 alembic==1.13.2
 asyncpg==0.29.0
+redis==7.4.1
 pytest-cov==7.1.0

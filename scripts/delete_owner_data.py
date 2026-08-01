@@ -13,6 +13,10 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.models import (
+    BroadcastCampaign,
+    BroadcastGroup,
+    BroadcastRecipient,
+    BroadcastTarget,
     Client,
     ExchangeConnection,
     Interaction,
@@ -98,6 +102,22 @@ async def _run(url: str, user_id: int, dry_run: bool) -> int:
             .scalars()
             .all()
         )
+        broadcast_groups = list(
+            await session.scalars(
+                select(BroadcastGroup).where(
+                    BroadcastGroup.owner_telegram_id == user.telegram_id
+                )
+            )
+        )
+        broadcast_group_ids = [group.id for group in broadcast_groups]
+        broadcast_campaigns = list(
+            await session.scalars(
+                select(BroadcastCampaign).where(
+                    BroadcastCampaign.owner_telegram_id == user.telegram_id
+                )
+            )
+        )
+        broadcast_ids = [campaign.id for campaign in broadcast_campaigns]
         if dry_run:
             print(
                 {
@@ -107,10 +127,30 @@ async def _run(url: str, user_id: int, dry_run: bool) -> int:
                     "project_analyses": len(analysis_rows),
                     "exchange_connections": len(connection_rows),
                     "subscriptions": len(subscription_rows),
+                    "broadcast_groups": len(broadcast_groups),
+                    "broadcast_campaigns": len(broadcast_campaigns),
                 }
             )
             await engine.dispose()
             return 0
+        if broadcast_ids:
+            await session.execute(
+                delete(BroadcastTarget).where(
+                    BroadcastTarget.broadcast_id.in_(broadcast_ids)
+                )
+            )
+            await session.execute(
+                delete(BroadcastCampaign).where(BroadcastCampaign.id.in_(broadcast_ids))
+            )
+        if broadcast_group_ids:
+            await session.execute(
+                delete(BroadcastRecipient).where(
+                    BroadcastRecipient.group_id.in_(broadcast_group_ids)
+                )
+            )
+            await session.execute(
+                delete(BroadcastGroup).where(BroadcastGroup.id.in_(broadcast_group_ids))
+            )
         if client_ids:
             await session.execute(
                 delete(Reminder).where(Reminder.client_id.in_(client_ids))
