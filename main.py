@@ -1,4 +1,5 @@
 """Main entry point for FreelanceRadar bot v2."""
+
 import asyncio
 import re
 import signal
@@ -8,8 +9,13 @@ from pathlib import Path
 import telegram.error
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes,
+    AIORateLimiter,
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -22,6 +28,7 @@ from bot.auth import owner_only
 from config import BOT_TOKEN, MONITOR_INTERVAL_MINUTES, validate_config
 from bot.keyboards import (
     MAIN_MENU_BUTTONS,
+    MENU_BROADCAST,
     MENU_HELP,
     MENU_JOBS,
     MENU_PROFILE,
@@ -31,21 +38,39 @@ from bot.keyboards import (
     settings_keyboard,
 )
 from bot.commands import (
-    start, help_command, check_sources_command,
-    blacklist_command, health_command, stats_command, refresh_stats,
-    search_command, chart_command,
+    start,
+    help_command,
+    check_sources_command,
+    blacklist_command,
+    health_command,
+    stats_command,
+    refresh_stats,
+    search_command,
+    chart_command,
 )
 from bot.handlers.sources_handler import (
-    sources_menu, list_sources, toggle_source, delete_source, get_sources_handler,
+    sources_menu,
+    list_sources,
+    toggle_source,
+    delete_source,
+    get_sources_handler,
 )
 from bot.handlers.jobs_handler import jobs_menu, get_jobs_handlers
 from bot.handlers.settings_handler import (
-    settings_menu, get_settings_handler, filters_menu,
-    auto_mode_menu, auto_mode_on, auto_mode_off,
+    settings_menu,
+    get_settings_handler,
+    filters_menu,
+    auto_mode_menu,
+    auto_mode_on,
+    auto_mode_off,
 )
 from bot.handlers.profile_handler import profile_menu, get_profile_handler
 from services.monitor import MonitorService
-from services.scheduler import scheduled_check, check_monitor_health, cleanup_blacklist_expired
+from services.scheduler import (
+    scheduled_check,
+    check_monitor_health,
+    cleanup_blacklist_expired,
+)
 
 configure_logging()
 logger = get_logger(__name__)
@@ -58,6 +83,7 @@ event_bus = get_event_bus()
 async def _metrics_middleware(event):
     """Collect metrics from events."""
     from services.metrics import get_metrics
+
     metrics = get_metrics()
     if event.name == Events.VACANCIES_FETCHED:
         metrics.counter("vacancies_fetched_total").inc(event.data.get("count", 0))
@@ -74,7 +100,9 @@ event_bus.add_middleware(_metrics_middleware)
 
 
 @owner_only
-async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_menu_buttons(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle main menu button presses."""
     text = update.message.text
 
@@ -92,10 +120,16 @@ async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
         await profile_menu(update, context)
     elif text == MENU_HELP:
         await help_command(update, context)
+    elif text == MENU_BROADCAST:
+        from bot.handlers.broadcast_handler import broadcast_menu
+
+        await broadcast_menu(update, context)
 
 
 @owner_only
-async def handle_back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_back_to_main(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle back to main menu."""
     query = update.callback_query
     await query.answer()
@@ -105,16 +139,21 @@ async def handle_back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 @owner_only
-async def handle_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_settings_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle back to settings menu."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "\u2699\ufe0f \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u043e\u0442\u0430", reply_markup=settings_keyboard()
+        "\u2699\ufe0f \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u043e\u0442\u0430",
+        reply_markup=settings_keyboard(),
     )
 
 
-async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _telegram_error_handler(
+    update: object, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Log exceptions with safe correlation metadata, never update contents."""
     effective_user = getattr(update, "effective_user", None)
     effective_chat = getattr(update, "effective_chat", None)
@@ -131,7 +170,9 @@ async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_
         logger.error("telegram.error", **fields, exc_info=context.error)
 
 
-async def _graceful_shutdown(application: Application, scheduler: AsyncIOScheduler) -> None:
+async def _graceful_shutdown(
+    application: Application, scheduler: AsyncIOScheduler
+) -> None:
     """Perform graceful shutdown of the bot."""
     logger.info("bot.graceful_shutdown_started")
 
@@ -167,34 +208,57 @@ def main() -> None:
 
     # Initialize database and run migrations before starting the bot
     from db.init_db import init_and_migrate
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_and_migrate())
 
     from config import get_config
+
     config = get_config()
     v2_enabled = config.RADAR_V2_ENABLED
     if config.ENVIRONMENT.casefold() == "production":
         if config.DATABASE_URL.startswith("sqlite"):
             raise RuntimeError("Production DATABASE_URL must use PostgreSQL")
+        if not config.REDIS_URL:
+            raise RuntimeError(
+                "Production REDIS_URL is required for broadcast/FSM safety"
+            )
         if config.BOT_REPLICAS != 1:
             raise RuntimeError(
-                "Local PicklePersistence requires BOT_REPLICAS=1; shared FSM is not configured"
+                "Telegram polling and scheduled jobs require BOT_REPLICAS=1"
             )
-    if v2_enabled:
-        # Alembic (not create_all): records alembic_version so future
-        # schema migrations apply cleanly on SQLite and PostgreSQL alike.
-        from core.db import run_v2_migrations
-        run_v2_migrations()
-        logger.info("v2.db_migrated")
+    # Broadcast groups and queue now share the SQLAlchemy/PostgreSQL schema,
+    # therefore Alembic is required even when the legacy UI is enabled.
+    from core.db import run_v2_migrations
 
-    builder = Application.builder().token(BOT_TOKEN)
-    if v2_enabled:
-        # Survive container restarts mid-conversation (onboarding, portfolio
-        # add, pending edit/note inputs live in user_data).
+    run_v2_migrations()
+    logger.info("database.migrated")
+
+    # Один лимитер охватывает рассылки, карточки, CRM и ответы хендлеров.
+    # Локальные ограничения broadcast остаются дополнительным предохранителем.
+    builder = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .rate_limiter(
+            AIORateLimiter(
+                overall_max_rate=25,
+                overall_time_period=1,
+                group_max_rate=20,
+                group_time_period=60,
+                max_retries=1,
+            )
+        )
+    )
+    if config.REDIS_URL:
+        from services.redis_persistence import RedisPersistence
+
+        builder = builder.persistence(RedisPersistence(config.REDIS_URL))
+    else:
+        # Development-only fallback. Production validation above requires Redis.
+        import os as _os
         from pathlib import Path as _Path
 
-        import os as _os
         from telegram.ext import PicklePersistence
 
         state_dir = _Path(_os.environ.get("PTB_STATE_DIR", "data"))
@@ -203,14 +267,7 @@ def main() -> None:
             PicklePersistence(filepath=str(state_dir / "ptb_state.pickle"))
         )
 
-        async def _v2_post_shutdown(app: Application) -> None:
-            """Release V2 resources (PTB restores its own signal handling)."""
-            from core.db import dispose_engine
-            from core.llm import aclose_shared_llm_client
-
-            await aclose_shared_llm_client()
-            await dispose_engine()
-            logger.info("v2.resources_released")
+    if v2_enabled:
 
         async def _v2_post_init(app: Application) -> None:
             """Publish the ☰ command menu once the bot is initialized."""
@@ -219,21 +276,41 @@ def main() -> None:
             await publish_bot_commands(app)
 
         builder = builder.post_init(_v2_post_init)
-        builder = builder.post_shutdown(_v2_post_shutdown)
+
+    async def _post_shutdown(app: Application) -> None:
+        """Release shared database, LLM and Redis limiter resources."""
+        from core.db import dispose_engine
+        from core.llm import aclose_shared_llm_client
+
+        runner = app.bot_data.get("broadcast_runner")
+        if runner is not None:
+            await runner.close()
+        if v2_enabled:
+            await aclose_shared_llm_client()
+        await dispose_engine()
+        logger.info("application.resources_released")
+
+    builder = builder.post_shutdown(_post_shutdown)
     application = builder.build()
 
     # Durable Bot API broadcast queue. It is intentionally separate from the
     # read-only Telethon monitoring session required by AGENTS.md §8.
     from services.broadcast import BroadcastRepository, BroadcastRunner
+    from services.broadcast.rate_limiter import build_broadcast_limiter
+
+    broadcast_limiter = build_broadcast_limiter(
+        config.REDIS_URL, config.BROADCAST_RATE_LIMIT
+    )
 
     broadcast_runner = BroadcastRunner(
         bot=application.bot,
-        repository=BroadcastRepository(config.DB_PATH),
+        repository=BroadcastRepository(),
         rate_limit=config.BROADCAST_RATE_LIMIT,
         batch_size=config.BROADCAST_BATCH_SIZE,
         max_retries=config.BROADCAST_MAX_RETRIES,
         progress_interval=config.BROADCAST_PROGRESS_INTERVAL,
         min_chat_interval_sec=config.BROADCAST_MIN_CHAT_INTERVAL_SEC,
+        rate_limiter=broadcast_limiter,
     )
     application.bot_data["broadcast_runner"] = broadcast_runner
 
@@ -251,25 +328,47 @@ def main() -> None:
     menu_pattern = "^(?:{})$".format(
         "|".join(re.escape(label) for label in MAIN_MENU_BUTTONS)
     )
-    application.add_handler(MessageHandler(
-        filters.Regex(menu_pattern),
-        handle_menu_buttons,
-    ))
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(menu_pattern),
+            handle_menu_buttons,
+        )
+    )
 
     application.add_handler(get_sources_handler())
     application.add_handler(get_settings_handler())
     application.add_handler(get_profile_handler())
 
-    application.add_handler(CallbackQueryHandler(list_sources, pattern="^list_sources$"))
-    application.add_handler(CallbackQueryHandler(toggle_source, pattern="^toggle_source_"))
-    application.add_handler(CallbackQueryHandler(delete_source, pattern="^delete_source_"))
-    application.add_handler(CallbackQueryHandler(handle_back_to_main, pattern="^back_to_main$"))
-    application.add_handler(CallbackQueryHandler(handle_settings_menu, pattern="^settings_menu$"))
-    application.add_handler(CallbackQueryHandler(filters_menu, pattern="^settings_filters$"))
-    application.add_handler(CallbackQueryHandler(auto_mode_menu, pattern="^settings_auto_mode$"))
-    application.add_handler(CallbackQueryHandler(auto_mode_on, pattern="^auto_mode_on$"))
-    application.add_handler(CallbackQueryHandler(auto_mode_off, pattern="^auto_mode_off$"))
-    application.add_handler(CallbackQueryHandler(refresh_stats, pattern="^refresh_stats$"))
+    application.add_handler(
+        CallbackQueryHandler(list_sources, pattern="^list_sources$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(toggle_source, pattern="^toggle_source_")
+    )
+    application.add_handler(
+        CallbackQueryHandler(delete_source, pattern="^delete_source_")
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_back_to_main, pattern="^back_to_main$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_settings_menu, pattern="^settings_menu$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(filters_menu, pattern="^settings_filters$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(auto_mode_menu, pattern="^settings_auto_mode$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(auto_mode_on, pattern="^auto_mode_on$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(auto_mode_off, pattern="^auto_mode_off$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(refresh_stats, pattern="^refresh_stats$")
+    )
 
     for handler in get_jobs_handlers():
         application.add_handler(handler)
@@ -281,19 +380,21 @@ def main() -> None:
 
     if v2_enabled:
         from bot.handlers.v2 import register_v2_handlers
+
         register_v2_handlers(application)
         logger.info("v2.handlers_registered")
 
     application.add_error_handler(_telegram_error_handler)
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        scheduled_check,
-        "interval",
-        minutes=MONITOR_INTERVAL_MINUTES,
-        args=[application],
-        id="check_sources",
-    )
+    if not v2_enabled:
+        scheduler.add_job(
+            scheduled_check,
+            "interval",
+            minutes=MONITOR_INTERVAL_MINUTES,
+            args=[application],
+            id="check_sources",
+        )
     scheduler.add_job(
         check_monitor_health,
         "interval",
@@ -317,6 +418,7 @@ def main() -> None:
     )
     if v2_enabled:
         from monitoring.worker import register_v2_jobs
+
         register_v2_jobs(scheduler, application)
     scheduler.start()
 

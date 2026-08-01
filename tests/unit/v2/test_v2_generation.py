@@ -1,4 +1,5 @@
 """Extraction + generation guardrail tests — §3.2, §3.5, §6.3–6.4."""
+
 import pytest
 
 from core.generation import (
@@ -141,16 +142,15 @@ class TestGenerateProposal:
         assert result.violations == []
         assert result.attempts == 1
         # §6.4: prompt must contain ONLY portfolio facts as the fact source.
-        system = llm.calls[0]["messages"][0]["content"]
-        assert "Бот записи для барбершопа" in system
+        user_data = llm.calls[0]["messages"][1]["content"]
+        assert "Бот записи для барбершопа" in user_data
+        assert "Бот записи для барбершопа" not in llm.calls[0]["messages"][0]["content"]
 
     async def test_violation_triggers_one_retry(self, portfolio) -> None:
         """Bad first draft → retry with violation feedback (§6.4)."""
         bad = "Здравствуйте, увидел ваш проект. Сделаю быстро."
         llm = FakeLLM([bad, GOOD_PROPOSAL])
-        result = await generate_proposal(
-            "Нужен бот", portfolio, llm, model="strong"
-        )
+        result = await generate_proposal("Нужен бот", portfolio, llm, model="strong")
         assert result.attempts == 2
         assert result.violations == []
         retry_message = llm.calls[1]["messages"][-1]["content"]

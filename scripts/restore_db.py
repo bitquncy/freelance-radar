@@ -1,4 +1,5 @@
 """Explicitly confirmed PostgreSQL restore helper."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,6 +12,15 @@ CONFIRMATION = "DESTROY-AND-RESTORE"
 
 def _is_postgres_url(url: str) -> bool:
     return url.startswith(("postgresql://", "postgresql+asyncpg://", "postgres://"))
+
+
+def _cli_postgres_url(url: str) -> str:
+    """Преобразовать SQLAlchemy URL в формат libpq/pg_restore."""
+    if url.startswith("postgresql+asyncpg://"):
+        return "postgresql://" + url.removeprefix("postgresql+asyncpg://")
+    if url.startswith("postgres://"):
+        return "postgresql://" + url.removeprefix("postgres://")
+    return url
 
 
 def main() -> int:
@@ -30,7 +40,15 @@ def main() -> int:
         return 0
     if shutil.which("pg_restore") is None:
         parser.error("pg_restore is not available on PATH")
-    command = ["pg_restore", "--clean", "--if-exists", "--no-owner", "--dbname", url, args.backup]
+    command = [
+        "pg_restore",
+        "--clean",
+        "--if-exists",
+        "--no-owner",
+        "--dbname",
+        _cli_postgres_url(url),
+        args.backup,
+    ]
     return subprocess.run(command, check=False).returncode
 
 

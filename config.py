@@ -1,4 +1,5 @@
 """Configuration module for FreelanceRadar bot with Pydantic validation."""
+
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
@@ -18,32 +19,59 @@ class Config(BaseSettings):
     OWNER_CHAT_ID: int = Field(..., gt=0, description="Telegram user ID of the owner")
 
     # AI Configuration (OpenAI or OpenRouter)
-    OPENAI_API_KEY: str = Field(default="", description="OpenAI/OpenRouter API key (can be empty for testing)")
-    OPENAI_MODEL: str = Field(default="gpt-4o-mini", description="Model name (e.g., gpt-4o-mini or openrouter model)")
-    OPENAI_BASE_URL: Optional[str] = Field(default=None, description="Custom base URL (e.g., https://openrouter.ai/api/v1)")
+    OPENAI_API_KEY: str = Field(
+        default="", description="OpenAI/OpenRouter API key (can be empty for testing)"
+    )
+    OPENAI_MODEL: str = Field(
+        default="gpt-4o-mini",
+        description="Model name (e.g., gpt-4o-mini or openrouter model)",
+    )
+    OPENAI_BASE_URL: Optional[str] = Field(
+        default=None, description="Custom base URL (e.g., https://openrouter.ai/api/v1)"
+    )
 
     # Telegram User API (for Telethon - optional, HTTP parser is used by default)
-    TELEGRAM_API_ID: Optional[int] = Field(default=None, description="Telegram API ID (optional)")
-    TELEGRAM_API_HASH: Optional[str] = Field(default=None, description="Telegram API hash (optional)")
+    TELEGRAM_API_ID: Optional[int] = Field(
+        default=None, description="Telegram API ID (optional)"
+    )
+    TELEGRAM_API_HASH: Optional[str] = Field(
+        default=None, description="Telegram API hash (optional)"
+    )
 
     # Database Configuration
-    DB_PATH: str = Field(default="freelance_radar.db", description="SQLite database path")
+    DB_PATH: str = Field(
+        default="freelance_radar.db", description="SQLite database path"
+    )
 
     # Kwork Parser Configuration
     KWORK_PROJECTS_URL: str = Field(
         default="https://kwork.ru/projects",
         description="Kwork projects URL",
     )
-    KWORK_REQUEST_DELAY_MIN: float = Field(default=2.0, ge=0.1, description="Min request delay")
-    KWORK_REQUEST_DELAY_MAX: float = Field(default=5.0, ge=0.1, description="Max request delay")
+    KWORK_REQUEST_DELAY_MIN: float = Field(
+        default=2.0, ge=0.1, description="Min request delay"
+    )
+    KWORK_REQUEST_DELAY_MAX: float = Field(
+        default=5.0, ge=0.1, description="Max request delay"
+    )
     KWORK_MAX_PAGES: int = Field(default=1, ge=1, description="Max pages to parse")
     KWORK_MAX_DETAIL_PAGES: int = Field(default=5, ge=1, description="Max detail pages")
+    KWORK_DAILY_REQUEST_LIMIT: int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+        description="Persistent global daily limit for Kwork HTTP pages",
+    )
 
     # Monitoring Configuration
-    MONITOR_INTERVAL_MINUTES: int = Field(default=15, ge=1, description="Monitor interval")
+    MONITOR_INTERVAL_MINUTES: int = Field(
+        default=15, ge=1, description="Monitor interval"
+    )
 
     # Default Settings
-    DEFAULT_COOLDOWN_SEC: int = Field(default=3600, ge=0, description="Default cooldown")
+    DEFAULT_COOLDOWN_SEC: int = Field(
+        default=3600, ge=0, description="Default cooldown"
+    )
 
     # Safe broadcast settings. The bot only posts to explicitly configured
     # destinations where it already has permission to send messages.
@@ -65,7 +93,8 @@ class Config(BaseSettings):
         description="Minimum interval between broadcast posts to one chat",
     )
     BROADCAST_TIMEZONE: str = Field(
-        default="Asia/Yekaterinburg", description="Timezone used by broadcast scheduling UX"
+        default="Asia/Yekaterinburg",
+        description="Timezone used by broadcast scheduling UX",
     )
 
     # User-Agent for HTTP requests
@@ -127,9 +156,22 @@ class Config(BaseSettings):
     @field_validator("KWORK_REQUEST_DELAY_MAX")
     @classmethod
     def delay_max_greater_than_min(cls, v: float, info) -> float:
-        if "KWORK_REQUEST_DELAY_MIN" in info.data and v < info.data["KWORK_REQUEST_DELAY_MIN"]:
-            raise ValueError("KWORK_REQUEST_DELAY_MAX must be >= KWORK_REQUEST_DELAY_MIN")
+        if (
+            "KWORK_REQUEST_DELAY_MIN" in info.data
+            and v < info.data["KWORK_REQUEST_DELAY_MIN"]
+        ):
+            raise ValueError(
+                "KWORK_REQUEST_DELAY_MAX must be >= KWORK_REQUEST_DELAY_MIN"
+            )
         return v
+
+    @field_validator("PAYMENT_CURRENCY")
+    @classmethod
+    def payment_currency_is_rub(cls, value: str) -> str:
+        value = value.upper()
+        if value != "RUB":
+            raise ValueError("Only RUB is supported by the current price table")
+        return value
 
     def validate(self) -> None:
         """Validate that all required fields are set."""
@@ -169,6 +211,7 @@ KWORK_REQUEST_DELAY_MIN = get_config().KWORK_REQUEST_DELAY_MIN
 KWORK_REQUEST_DELAY_MAX = get_config().KWORK_REQUEST_DELAY_MAX
 KWORK_MAX_PAGES = get_config().KWORK_MAX_PAGES
 KWORK_MAX_DETAIL_PAGES = get_config().KWORK_MAX_DETAIL_PAGES
+KWORK_DAILY_REQUEST_LIMIT = get_config().KWORK_DAILY_REQUEST_LIMIT
 MONITOR_INTERVAL_MINUTES = get_config().MONITOR_INTERVAL_MINUTES
 DEFAULT_COOLDOWN_SEC = get_config().DEFAULT_COOLDOWN_SEC
 BROADCAST_RATE_LIMIT = get_config().BROADCAST_RATE_LIMIT

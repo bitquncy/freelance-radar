@@ -5,6 +5,7 @@ adapter only maps its output to :class:`RawListing`. Scraping frequency is
 controlled by the worker and NEVER increased without explicit approval
 (AGENTS.md §12.7).
 """
+
 from typing import List, Optional
 
 from db.models import JobVacancy
@@ -42,9 +43,9 @@ def vacancy_to_listing(vacancy: JobVacancy, platform: Platform) -> RawListing:
         raw_payload={
             "deadline": vacancy.deadline,
             "skills": vacancy.skills_list,
-            "fetched_at": vacancy.fetched_at.isoformat()
-            if vacancy.fetched_at
-            else None,
+            "fetched_at": (
+                vacancy.fetched_at.isoformat() if vacancy.fetched_at else None
+            ),
         },
     )
 
@@ -74,3 +75,11 @@ class KworkAdapter(SourceAdapter):
         listings = [vacancy_to_listing(v, self.platform) for v in vacancies]
         logger.info("adapter.kwork_fetched", count=len(listings))
         return listings
+
+    async def close(self) -> None:
+        """Освободить persistent Playwright/Chromium, созданный парсером."""
+        if self._parser is None:
+            return
+        cleanup = getattr(self._parser, "cleanup", None)
+        if cleanup is not None:
+            await cleanup()

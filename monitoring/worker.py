@@ -17,11 +17,12 @@ Scheduling notes (AGENTS.md §12.7): the V2 tick reuses the SAME
 frequency is never increased without explicit approval. "Priority scanning"
 for Business (§7) affects notification ordering only, not scrape frequency.
 """
+
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telegram import InlineKeyboardMarkup
@@ -36,6 +37,8 @@ from core.models import (
     Client,
     ConnectionStatus,
     ExchangeConnection,
+    NotificationDelivery,
+    NotificationStatus,
     Platform,
     PortfolioItem,
     Project,
@@ -324,6 +327,15 @@ async def _persist_analysis(
             analysis = await analyze_project_for_user(
                 session, project, user, None, "", extraction=extraction
             )
+            await session.flush()
+            session.add(
+                NotificationDelivery(
+                    analysis_id=analysis.id,
+                    user_id=user.id,
+                    project_id=project.id,
+                    chat_id=user.telegram_id,
+                )
+            )
             await session.commit()
             return analysis
         except IntegrityError:
@@ -334,6 +346,118 @@ async def _persist_analysis(
                 user_id=user.id,
             )
             return None
+
+
+async def _deliver_analysis_notification(
+    factory: async_sessionmaker,
+    analysis_id: int,
+    application: Optional[Application],
+    notify_fn: NotifyFn,
+) -> Optional[bool]:
+    """Захватить и доставить одну outbox-запись без открытой DB-транзакции."""
+    now = utcnow()
+    async with factory() as session:
+        delivery = (
+            await session.execute(
+                select(NotificationDelivery)
+                .where(
+                    NotificationDelivery.analysis_id == analysis_id,
+                    NotificationDelivery.status == NotificationStatus.PENDING,
+                    NotificationDelivery.next_attempt_at <= now,
+                )
+                .with_for_update(skip_locked=True)
+            )
+        ).scalar_one_or_none()
+        if delivery is None:
+            return None
+        analysis = await session.get(ProjectAnalysis, delivery.analysis_id)
+        project = await session.get(Project, delivery.project_id)
+        if analysis is None or project is None:
+            await session.delete(delivery)
+            await session.commit()
+            return None
+        from bot.handlers.v2.cards import project_card, project_card_keyboard
+
+        text = project_card(project, analysis)
+        reply_markup = project_card_keyboard(project.id)
+        delivery.status = NotificationStatus.SENDING
+        delivery.claimed_at = now
+        delivery.attempts += 1
+        delivery_id = delivery.id
+        chat_id = delivery.chat_id
+        await session.commit()
+
+    delivered = await notify_fn(
+        application,
+        chat_id,
+        text,
+        reply_markup,
+    )
+    async with factory() as session:
+        delivery = await session.get(NotificationDelivery, delivery_id)
+        if delivery is None:
+            return delivered is not False
+        if delivered is False:
+            delay = min(3600, 4 ** min(delivery.attempts - 1, 5))
+            delivery.status = NotificationStatus.PENDING
+            delivery.next_attempt_at = utcnow() + timedelta(seconds=delay)
+            delivery.last_error = "telegram_delivery_failed"
+            delivery.claimed_at = None
+        else:
+            delivery.status = NotificationStatus.SENT
+            delivery.sent_at = utcnow()
+            delivery.last_error = None
+            delivery.claimed_at = None
+        await session.commit()
+    return delivered is not False
+
+
+async def _drain_pending_notifications(
+    factory: async_sessionmaker,
+    application: Optional[Application],
+    notify_fn: NotifyFn,
+    *,
+    limit: int = 100,
+) -> Tuple[int, int]:
+    """Восстановить зависшие записи и повторить готовые уведомления."""
+    now = utcnow()
+    stale_before = now - timedelta(minutes=10)
+    async with factory() as session:
+        await session.execute(
+            update(NotificationDelivery)
+            .where(
+                NotificationDelivery.status == NotificationStatus.SENDING,
+                NotificationDelivery.claimed_at < stale_before,
+            )
+            .values(
+                status=NotificationStatus.PENDING,
+                next_attempt_at=now,
+                claimed_at=None,
+                last_error="stale_delivery_recovered",
+            )
+        )
+        ids = list(
+            await session.scalars(
+                select(NotificationDelivery.analysis_id)
+                .where(
+                    NotificationDelivery.status == NotificationStatus.PENDING,
+                    NotificationDelivery.next_attempt_at <= now,
+                )
+                .order_by(NotificationDelivery.id)
+                .limit(limit)
+            )
+        )
+        await session.commit()
+    sent = failed = 0
+    for analysis_id in ids:
+        delivered = await _deliver_analysis_notification(
+            factory, analysis_id, application, notify_fn
+        )
+        if delivered is True:
+            sent += 1
+        elif delivered is False:
+            failed += 1
+    return sent, failed
 
 
 async def run_radar_tick(
@@ -358,6 +482,13 @@ async def run_radar_tick(
     notify_fn: NotifyFn = notify or default_notify
     model = extraction_model or cfg.EXTRACTION_MODEL
     stats = TickStats()
+
+    if application is not None or notify is not None:
+        retried, retry_failures = await _drain_pending_notifications(
+            factory, application, notify_fn
+        )
+        stats.notifications += retried
+        stats.notify_failures += retry_failures
 
     # Phase 0: read connections + users (short read-only session).
     # Known staleness window: user rows are read once per tick — a tariff
@@ -396,9 +527,7 @@ async def run_radar_tick(
         logger.info("v2.tick_done", **_tick_log_fields(stats))
         return stats
 
-    client = llm if llm is not None else (
-        get_shared_llm_client() if auto_llm else None
-    )
+    client = llm if llm is not None else (get_shared_llm_client() if auto_llm else None)
     ordered_connections = sorted(
         connections, key=lambda c: _connection_priority(c, users_by_id)
     )
@@ -433,18 +562,13 @@ async def run_radar_tick(
                 continue
             stats.analyses += 1
             if application is not None or notify is not None:
-                from bot.handlers.v2.cards import (
-                    project_card,
-                    project_card_keyboard,
-                )
-
-                delivered = await notify_fn(
+                delivered = await _deliver_analysis_notification(
+                    factory,
+                    analysis.id,
                     application,
-                    user.telegram_id,
-                    project_card(project, analysis),
-                    project_card_keyboard(project.id),
+                    notify_fn,
                 )
-                if delivered is False:
+                if delivered is not True:
                     stats.notify_failures += 1
                 else:
                     stats.notifications += 1
@@ -597,9 +721,7 @@ async def run_weekly_report_tick(
             active_clients = await crm.count_active_clients(session, user.id)
             if not analyses[0] and not proposals_sent and not active_clients:
                 continue  # nothing to report — no noise (§3.8 spirit)
-            best = (
-                f"{analyses[1]:.0f}%" if analyses[1] is not None else "—"
-            )
+            best = f"{analyses[1]:.0f}%" if analyses[1] is not None else "—"
             text = (
                 f"{E.CHART} <b>Неделя в FreelanceRadar</b>\n"
                 f"Проанализировано заказов: <b>{analyses[0]}</b>\n"
@@ -677,9 +799,7 @@ async def run_expiry_reminders_tick(
             if user.expiry_notified_at is not None:
                 continue
             user.expiry_notified_at = now
-            targets.append(
-                (user.telegram_id, _expiry_message(user, days, expired))
-            )
+            targets.append((user.telegram_id, _expiry_message(user, days, expired)))
         if not targets:
             return 0
         await session.commit()

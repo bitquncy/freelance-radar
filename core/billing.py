@@ -6,6 +6,7 @@ always re-validated against the §7 price table server-side — the client
 Telegram ``payment_charge_id`` (unique column + savepoint recovery), so a
 re-delivered ``successful_payment`` update can never double-extend.
 """
+
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional, Tuple
@@ -83,9 +84,7 @@ def parse_payload(payload: str) -> PaymentIntent:
         raise PaymentError(f"tier is not purchasable: {tier.value}")
     if days != SUBSCRIPTION_DAYS:
         raise PaymentError(f"unsupported period: {days} days")
-    return PaymentIntent(
-        tier=tier, days=days, amount_rub=tariffs.PRICES_RUB[tier]
-    )
+    return PaymentIntent(tier=tier, days=days, amount_rub=tariffs.PRICES_RUB[tier])
 
 
 def validate_paid_amount(intent: PaymentIntent, total_amount: int) -> None:
@@ -99,6 +98,12 @@ def validate_paid_amount(intent: PaymentIntent, total_amount: int) -> None:
             f"amount mismatch: paid {total_amount}, "
             f"expected {intent.amount_kopecks}"
         )
+
+
+def validate_paid_currency(actual: str, expected: str = "RUB") -> None:
+    """Отклонить платёж в валюте, отличной от серверной конфигурации."""
+    if actual.upper() != expected.upper():
+        raise PaymentError(f"currency mismatch: paid {actual}, expected {expected}")
 
 
 async def apply_paid_subscription(
@@ -122,7 +127,10 @@ async def apply_paid_subscription(
     # user-row update remain in the caller's single transaction.
     locked_user = (
         await session.execute(
-            select(User).where(User.id == user.id).with_for_update()
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one()
     base = now
@@ -152,9 +160,7 @@ async def apply_paid_subscription(
         # Idempotency: this exact Telegram charge was already applied.
         existing = (
             await session.execute(
-                select(Subscription).where(
-                    Subscription.payment_charge_id == charge_id
-                )
+                select(Subscription).where(Subscription.payment_charge_id == charge_id)
             )
         ).scalar_one_or_none()
         logger.info(

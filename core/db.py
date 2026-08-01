@@ -92,7 +92,7 @@ def run_v2_migrations() -> None:
     import asyncio
     from pathlib import Path
 
-    from alembic import command  # type: ignore[attr-defined]
+    import alembic.command as alembic_command
     from alembic.config import Config as AlembicConfig
 
     try:
@@ -106,7 +106,7 @@ def run_v2_migrations() -> None:
     config = AlembicConfig(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "alembic"))
     try:
-        command.upgrade(config, "head")
+        alembic_command.upgrade(config, "head")
     finally:
         if previous_loop is not None:
             asyncio.set_event_loop(previous_loop)

@@ -8,6 +8,7 @@ Without ``PAYMENT_PROVIDER_TOKEN`` the buttons stay visible but answer with
 a friendly "скоро" alert and the manual /grant flow remains the only path —
 so the feature ships dark until the owner connects ЮKassa in BotFather.
 """
+
 from typing import List
 
 from telegram import LabeledPrice, Update
@@ -52,9 +53,7 @@ def _provider_token() -> str:
     return get_config().PAYMENT_PROVIDER_TOKEN
 
 
-async def buy_subscription(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def buy_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle «💳 Оплатить <tier>» — send a Telegram invoice."""
     query = update.callback_query
     if query is None or query.data is None or update.effective_user is None:
@@ -107,8 +106,11 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if pcq is None:
         return
     try:
+        from config import get_config
+
         intent = billing.parse_payload(pcq.invoice_payload)
         billing.validate_paid_amount(intent, pcq.total_amount)
+        billing.validate_paid_currency(pcq.currency, get_config().PAYMENT_CURRENCY)
     except billing.PaymentError as exc:
         logger.warning("billing.precheckout_rejected", error=str(exc))
         await pcq.answer(
@@ -134,8 +136,11 @@ async def on_successful_payment(
         return
     payment = message.successful_payment
     try:
+        from config import get_config
+
         intent = billing.parse_payload(payment.invoice_payload)
         billing.validate_paid_amount(intent, payment.total_amount)
+        billing.validate_paid_currency(payment.currency, get_config().PAYMENT_CURRENCY)
     except billing.PaymentError as exc:
         # Money was charged but the payload is foreign/borked — never
         # activate silently; log loudly for manual reconciliation.

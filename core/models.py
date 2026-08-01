@@ -13,6 +13,7 @@ Deviations from the simplified spec model (documented per AGENTS.md §12.6):
     * ``Proposal.mode`` / ``Proposal.violations`` — track template vs AI
       generation and guardrail violations (§6.4).
 """
+
 import enum
 from datetime import datetime, timezone
 from typing import Any, List, Optional
@@ -125,6 +126,36 @@ class PaymentStatus(str, enum.Enum):
     REFUNDED = "refunded"
 
 
+class NotificationStatus(str, enum.Enum):
+    """Состояние доставки карточки проекта через transactional outbox."""
+
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+
+
+class BroadcastStatus(str, enum.Enum):
+    """Состояние массовой Telegram-рассылки."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    PAUSED = "paused"
+    DONE = "done"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class BroadcastTargetStatus(str, enum.Enum):
+    """Состояние одного получателя рассылки."""
+
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    SKIPPED = "skipped"
+
+
 def _enum_col(enum_cls: type) -> Enum:
     """Portable enum column: VARCHAR + values, no native DB enum."""
     return Enum(
@@ -188,7 +219,9 @@ class ExchangeConnection(Base):
             postgresql_where=text("platform != 'tg_channel'"),
         ),
         UniqueConstraint(
-            "user_id", "platform", "normalized_identity",
+            "user_id",
+            "platform",
+            "normalized_identity",
             name="uq_connections_user_platform_identity",
         ),
     )
@@ -197,7 +230,7 @@ class ExchangeConnection(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     platform: Mapped[Platform] = mapped_column(_enum_col(Platform))
     credentials_ref: Mapped[Optional[str]] = mapped_column(String(255))
-    settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     normalized_identity: Mapped[Optional[str]] = mapped_column(String(255))
     status: Mapped[ConnectionStatus] = mapped_column(
         _enum_col(ConnectionStatus), default=ConnectionStatus.ACTIVE
@@ -238,7 +271,7 @@ class Project(Base):
     client_orders: Mapped[Optional[int]] = mapped_column(Integer)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     url: Mapped[Optional[str]] = mapped_column(Text)
-    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     analyses: Mapped[List["ProjectAnalysis"]] = relationship(
@@ -275,6 +308,133 @@ class ProjectAnalysis(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="analyses")
+
+
+class NotificationDelivery(Base):
+    """Надёжная очередь Telegram-уведомлений о новых проектах."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", name="uq_notification_analysis"),
+        Index("ix_notification_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("project_analyses.id"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[NotificationStatus] = mapped_column(
+        _enum_col(NotificationStatus), default=NotificationStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BroadcastGroup(Base):
+    """Ручной сегмент чатов, в которых боту разрешена публикация."""
+
+    __tablename__ = "broadcast_groups"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_telegram_id", "name", name="uq_broadcast_group_owner_name"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BroadcastRecipient(Base):
+    """Разрешённый Telegram-чат с метаданными для фильтров."""
+
+    __tablename__ = "broadcast_recipients"
+    __table_args__ = (
+        UniqueConstraint(
+            "group_id", "chat_id", name="uq_broadcast_recipient_group_chat"
+        ),
+        Index("ix_broadcast_recipient_audience", "group_id", "is_active", "chat_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("broadcast_groups.id", ondelete="CASCADE"), index=True
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    chat_type: Mapped[str] = mapped_column(String(32))
+    title: Mapped[Optional[str]] = mapped_column(String(255))
+    username: Mapped[Optional[str]] = mapped_column(String(255))
+    language_code: Mapped[Optional[str]] = mapped_column(String(16))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    deactivated_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    last_broadcast_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BroadcastCampaign(Base):
+    """Кампания с неизменяемым снимком аудитории."""
+
+    __tablename__ = "broadcast_campaigns"
+    __table_args__ = (Index("ix_broadcast_campaign_due", "status", "scheduled_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("broadcast_groups.id"), index=True)
+    status: Mapped[BroadcastStatus] = mapped_column(
+        _enum_col(BroadcastStatus), default=BroadcastStatus.QUEUED
+    )
+    content_type: Mapped[str] = mapped_column(String(32), default="copy")
+    source_chat_id: Mapped[int] = mapped_column(BigInteger)
+    source_message_ids: Mapped[List[int]] = mapped_column(JSON, default=list)
+    reply_markup: Mapped[Optional[list[list[dict[str, str]]]]] = mapped_column(JSON)
+    filters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    disable_notification: Mapped[bool] = mapped_column(Boolean, default=False)
+    protect_content: Mapped[bool] = mapped_column(Boolean, default=False)
+    progress_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    progress_message_id: Mapped[Optional[int]] = mapped_column(Integer)
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    blocked_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BroadcastTarget(Base):
+    """Источник истины по доставке одному чату."""
+
+    __tablename__ = "broadcast_targets_v2"
+    __table_args__ = (
+        UniqueConstraint("broadcast_id", "chat_id", name="uq_broadcast_target_chat"),
+        Index("ix_broadcast_target_claim", "broadcast_id", "status", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    broadcast_id: Mapped[int] = mapped_column(
+        ForeignKey("broadcast_campaigns.id", ondelete="CASCADE"), index=True
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[BroadcastTargetStatus] = mapped_column(
+        _enum_col(BroadcastTargetStatus), default=BroadcastTargetStatus.PENDING
+    )
+    error_code: Mapped[Optional[str]] = mapped_column(String(255))
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Proposal(Base):
@@ -404,6 +564,6 @@ class Subscription(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-def as_dict(obj: Any) -> dict:
+def as_dict(obj: Any) -> dict[str, Any]:
     """Serialize a model instance to a plain dict (column values only)."""
     return {c.key: getattr(obj, c.key) for c in obj.__table__.columns}

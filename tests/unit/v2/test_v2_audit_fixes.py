@@ -4,6 +4,7 @@ Each test pins a specific audit finding: N× extraction cost, double-tap
 races, transaction/idempotency behavior, resource lifecycle, notification
 accounting, tariff-limit bypass, healthcheck and enum-format bugs.
 """
+
 import os
 import sqlite3
 import subprocess
@@ -26,6 +27,8 @@ from constants import FilterReason
 from core.models import (
     Client,
     ExchangeConnection,
+    NotificationDelivery,
+    NotificationStatus,
     Platform,
     ProjectAnalysis,
     Proposal,
@@ -125,9 +128,7 @@ class TestExtractionOncePerListing:
         assert stats.notifications == 2
         assert len(llm.calls) == 1  # would raise inside FakeLLM on a 2nd call
         async with session_factory() as check:
-            analyses = (
-                (await check.execute(select(ProjectAnalysis))).scalars().all()
-            )
+            analyses = (await check.execute(select(ProjectAnalysis))).scalars().all()
         assert len(analyses) == 2
         assert {a.extracted_budget for a in analyses} == {30000}
 
@@ -152,9 +153,28 @@ class TestNotifyAccounting:
         assert stats.notify_failures == 1
         async with session_factory() as check:
             assert (
-                len((await check.execute(select(ProjectAnalysis))).scalars().all())
-                == 1
+                len((await check.execute(select(ProjectAnalysis))).scalars().all()) == 1
             )
+            delivery = (await check.execute(select(NotificationDelivery))).scalar_one()
+            assert delivery.status is NotificationStatus.PENDING
+            delivery.next_attempt_at = utcnow()
+            await check.commit()
+
+        recovered = NotifyRecorder()
+        retry_stats = await run_radar_tick(
+            None,
+            session_factory=session_factory,
+            adapters=[FakeAdapter([_listing("n-1")])],
+            llm=None,
+            notify=recovered,
+            extraction_model="cheap",
+            auto_llm=False,
+        )
+        assert retry_stats.notifications == 1
+        assert len(recovered.sent) == 1
+        async with session_factory() as check:
+            delivery = (await check.execute(select(NotificationDelivery))).scalar_one()
+            assert delivery.status is NotificationStatus.SENT
 
 
 class TestAdapterLifecycle:
@@ -299,9 +319,7 @@ class TestDoubleTapSend:
         self, session_factory, session: AsyncSession, user, portfolio, project
     ) -> None:
         """AUDIT C-4: double-tap «Отправлено» from DRAFT → one client, one reminder."""
-        proposal = Proposal(
-            project_id=project.id, user_id=user.id, generated_text="т"
-        )
+        proposal = Proposal(project_id=project.id, user_id=user.id, generated_text="т")
         session.add(proposal)
         await session.commit()
 
@@ -357,6 +375,11 @@ class TestRemindersAtMostOnce:
 
 
 class TestChannelLimitEnforcedAtSave:
+    async def test_blank_channel_input_is_rejected_without_crash(self) -> None:
+        update = make_update(text="   ")
+        await add_channel_from_text(update, make_context(), "   ")
+        assert update.message.reply_text.await_count == 1
+
     async def test_delayed_text_cannot_bypass_limit(
         self, session_factory, session: AsyncSession, user
     ) -> None:
@@ -376,9 +399,7 @@ class TestChannelLimitEnforcedAtSave:
         reply = update.message.reply_text.await_args.args[0]
         assert "Лимит" in reply
         async with session_factory() as check:
-            rows = (
-                (await check.execute(select(ExchangeConnection))).scalars().all()
-            )
+            rows = (await check.execute(select(ExchangeConnection))).scalars().all()
         assert len(rows) == 5
 
     async def test_duplicate_channel_rejected(
@@ -397,9 +418,7 @@ class TestChannelLimitEnforcedAtSave:
         await add_channel_from_text(update, make_context(), "t.me/orders")
         assert "уже подключён" in update.message.reply_text.await_args.args[0]
         async with session_factory() as check:
-            rows = (
-                (await check.execute(select(ExchangeConnection))).scalars().all()
-            )
+            rows = (await check.execute(select(ExchangeConnection))).scalars().all()
         assert len(rows) == 1
 
 
@@ -408,9 +427,7 @@ class TestOwnershipAtFlowStart:
         self, session_factory, session: AsyncSession, user, project
     ) -> None:
         """AUDIT M-7: forged callback ids are rejected at flow start."""
-        proposal = Proposal(
-            project_id=project.id, user_id=user.id, generated_text="т"
-        )
+        proposal = Proposal(project_id=project.id, user_id=user.id, generated_text="т")
         session.add(proposal)
         await session.commit()
         intruder = make_update(
@@ -551,6 +568,7 @@ class TestStartupSequence:
             run_v2_migrations()
             # The caller's loop must still be the current one...
             assert asyncio.get_event_loop() is loop
+
             # ...and the scheduler must be able to bind to it (main.py:254).
             # APScheduler.start() needs asyncio.get_running_loop(), so wrap
             # the check in loop.run_until_complete to create a running context.
@@ -578,9 +596,7 @@ class TestStartupSequence:
         conn = sqlite3.connect(db_path)
         tables = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         conn.close()
         assert "alembic_version" in tables  # future upgrades apply cleanly
@@ -598,9 +614,7 @@ class TestAtomicClaimMechanism:
         """
         from sqlalchemy import update as sa_update
 
-        proposal = Proposal(
-            project_id=project.id, user_id=user.id, generated_text="т"
-        )
+        proposal = Proposal(project_id=project.id, user_id=user.id, generated_text="т")
         session.add(proposal)
         await session.commit()
         proposal_id = proposal.id
@@ -656,7 +670,5 @@ class TestSourceAddRace:
         assert "уже подключён" in answer_args.args[0]
         assert answer_args.kwargs.get("show_alert") is True
         async with session_factory() as check:
-            rows = (
-                (await check.execute(select(ExchangeConnection))).scalars().all()
-            )
+            rows = (await check.execute(select(ExchangeConnection))).scalars().all()
         assert len(rows) == 1  # no duplicate row was created

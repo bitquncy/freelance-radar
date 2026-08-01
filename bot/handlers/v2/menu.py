@@ -5,6 +5,7 @@ dead-end message. The dashboard shows live state (subscription, sources,
 portfolio, CRM) instead of a static button grid, because the most common
 question after opening the bot is "работает ли радар прямо сейчас?".
 """
+
 from typing import List, Tuple
 
 from sqlalchemy import func, select
@@ -49,7 +50,9 @@ HELP_TEXT = (
 )
 
 
-def main_menu_keyboard(onboarded: bool = True) -> InlineKeyboardMarkup:
+def main_menu_keyboard(
+    onboarded: bool = True, *, broadcast_admin: bool = False
+) -> InlineKeyboardMarkup:
     """The V2 dashboard menu."""
     rows: List[List[InlineKeyboardButton]] = []
     if not onboarded:
@@ -75,6 +78,15 @@ def main_menu_keyboard(onboarded: bool = True) -> InlineKeyboardMarkup:
             primary_button("Помощь", icon=P.HELP, callback_data="v2:help"),
         ],
     ]
+    if broadcast_admin:
+        rows.insert(
+            -1,
+            [
+                primary_button(
+                    "Рассылка", icon=P.MEGAPHONE, callback_data="bcast_send_start"
+                )
+            ],
+        )
     return InlineKeyboardMarkup(rows)
 
 
@@ -92,9 +104,7 @@ async def _dashboard_stats(
     ).scalar_one()
     portfolio = (
         await session.execute(
-            select(func.count(PortfolioItem.id)).where(
-                PortfolioItem.user_id == user.id
-            )
+            select(func.count(PortfolioItem.id)).where(PortfolioItem.user_id == user.id)
         )
     ).scalar_one()
     clients = await crm.count_active_clients(session, user.id)
@@ -179,7 +189,12 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         stats = await _dashboard_stats(session, user)
         await session.commit()
         text = dashboard_text(user, *stats)
-        keyboard = main_menu_keyboard(onboarded=user.target_hourly_rate is not None)
+        from config import OWNER_CHAT_ID
+
+        keyboard = main_menu_keyboard(
+            onboarded=user.target_hourly_rate is not None,
+            broadcast_admin=update.effective_user.id == OWNER_CHAT_ID,
+        )
 
     if update.callback_query is not None:
         await update.callback_query.answer()
@@ -191,17 +206,13 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
         return
     if update.message is not None:
-        await update.message.reply_text(
-            text, parse_mode="HTML", reply_markup=keyboard
-        )
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Help screen with a way back to the menu."""
     keyboard = InlineKeyboardMarkup(
-        [
-            [primary_button("В меню", icon=P.BACK, callback_data="v2:menu")]
-        ]
+        [[primary_button("В меню", icon=P.BACK, callback_data="v2:menu")]]
     )
     if update.callback_query is not None:
         await update.callback_query.answer()

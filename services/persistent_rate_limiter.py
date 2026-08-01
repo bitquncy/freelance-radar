@@ -1,6 +1,7 @@
 """Persistent rate limiter using SQLite for state persistence."""
+
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -29,18 +30,29 @@ class PersistentRateLimiter:
         self.night_delay_multiplier = night_delay_multiplier
         self._last_request_time: float = 0
 
+    @staticmethod
+    def _today() -> str:
+        """Вернуть UTC-день, общий для всех процессов и реплик."""
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    @staticmethod
+    async def _ensure_table(db: aiosqlite.Connection) -> None:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rate_limiter (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                requests INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(date)
+            )
+        """
+        )
+
     async def _get_requests_today(self) -> int:
         """Get request count for today from DB."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._today()
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS rate_limiter (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT NOT NULL,
-                    requests INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(date)
-                )
-            """)
+            await self._ensure_table(db)
             cursor = await db.execute(
                 "SELECT requests FROM rate_limiter WHERE date = ?",
                 (today,),
@@ -48,16 +60,25 @@ class PersistentRateLimiter:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-    async def _increment_requests(self) -> None:
-        """Increment request counter for today."""
-        today = datetime.now().strftime("%Y-%m-%d")
+    async def acquire_request(self) -> bool:
+        """Атомарно зарезервировать один запрос в рамках суточного лимита."""
+        today = self._today()
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-                INSERT INTO rate_limiter (date, requests)
-                VALUES (?, 1)
-                ON CONFLICT(date) DO UPDATE SET requests = requests + 1
-            """, (today,))
+            await db.execute("BEGIN IMMEDIATE")
+            await self._ensure_table(db)
+            await db.execute(
+                "INSERT INTO rate_limiter (date, requests) VALUES (?, 0) "
+                "ON CONFLICT(date) DO NOTHING",
+                (today,),
+            )
+            cursor = await db.execute(
+                "UPDATE rate_limiter SET requests = requests + 1 "
+                "WHERE date = ? AND requests < ?",
+                (today, self.daily_limit),
+            )
+            acquired = cursor.rowcount == 1
             await db.commit()
+            return acquired
 
     async def can_make_request(self) -> bool:
         """Check if we can make another request today."""
@@ -66,7 +87,8 @@ class PersistentRateLimiter:
 
     async def record_request(self) -> None:
         """Record that we made a request."""
-        await self._increment_requests()
+        if not await self.acquire_request():
+            raise RuntimeError("Kwork daily request limit reached")
 
     def get_delay(self) -> float:
         """Get adaptive delay based on time of day."""
@@ -101,5 +123,5 @@ class PersistentRateLimiter:
             "requests_today": requests,
             "daily_limit": self.daily_limit,
             "remaining": max(0, self.daily_limit - requests),
-            "reset_date": datetime.now().strftime("%Y-%m-%d"),
+            "reset_date": self._today(),
         }
