@@ -1,4 +1,5 @@
 """Adapter tests — §3.1: единый интерфейс fetch() -> list[RawListing]."""
+
 from typing import List
 
 import httpx
@@ -28,8 +29,14 @@ def _vacancy(kwork_id: str = "k-1") -> JobVacancy:
 
 
 class FakeKworkParser:
+    def __init__(self) -> None:
+        self.cleaned = False
+
     async def fetch_vacancies(self, limit: int = 10) -> List[JobVacancy]:
         return [_vacancy("k-1"), _vacancy("k-2")]
+
+    async def cleanup(self) -> None:
+        self.cleaned = True
 
 
 class FakeTgParser:
@@ -65,6 +72,12 @@ class TestKworkAdapter:
         listings = await adapter.fetch()
         assert len(listings) == 2
         assert all(isinstance(item, RawListing) for item in listings)
+
+    async def test_close_releases_parser_browser(self) -> None:
+        parser = FakeKworkParser()
+        adapter = KworkAdapter(parser=parser)
+        await adapter.close()
+        assert parser.cleaned is True
 
 
 class TestTelegramAdapter:

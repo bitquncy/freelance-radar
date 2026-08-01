@@ -1,4 +1,5 @@
 """Админский UX безопасной рассылки по разрешённым чатам."""
+
 from __future__ import annotations
 
 import aiosqlite
@@ -7,8 +8,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
-    ContextTypes, ConversationHandler, CommandHandler,
-    CallbackQueryHandler, MessageHandler, filters
+    ContextTypes,
+    ConversationHandler,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
 )
 
 import telegram
@@ -42,6 +47,7 @@ logger = get_logger(__name__)
 
 # ─── Main menu ───────────────────────────────────────────────────────
 
+
 @owner_only
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show broadcast main menu."""
@@ -51,22 +57,35 @@ async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "Автопоиск и вступление в чужие группы отключены.\n\n"
         "Выберите действие:",
         reply_markup=_main_keyboard(),
-        parse_mode=None
+        parse_mode=None,
     )
 
 
 def _main_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [success_button("Создать группу чатов", icon=P.PLUS, callback_data="bcast_group_create")],
+        [
+            success_button(
+                "Создать группу чатов", icon=P.PLUS, callback_data="bcast_group_create"
+            )
+        ],
         [primary_button("Мои группы", icon=P.LIST, callback_data="bcast_group_list")],
-        [success_button("Новая рассылка", icon=P.INBOX, callback_data="bcast_send_start")],
-        [primary_button("История рассылок", icon=P.SCROLL, callback_data="bcast_history")],
+        [
+            success_button(
+                "Новая рассылка", icon=P.INBOX, callback_data="bcast_send_start"
+            )
+        ],
+        [
+            primary_button(
+                "История рассылок", icon=P.SCROLL, callback_data="bcast_history"
+            )
+        ],
         [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 # ─── Group CRUD ──────────────────────────────────────────────────────
+
 
 @owner_only
 async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -76,10 +95,10 @@ async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await query.edit_message_text(
         f"{P.PLUS} **Новая группа чатов**\n\n"
-        "Введите название группы (например: \"Дизайн-каналы\"):\n\n"
+        'Введите название группы (например: "Дизайн-каналы"):\n\n'
         "/cancel — отмена",
         reply_markup=_cancel_kb(),
-        parse_mode=None
+        parse_mode=None,
     )
     return ENTERING_GROUP_NAME
 
@@ -90,7 +109,9 @@ async def save_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     name = update.message.text.strip()
 
     if len(name) > 100:
-        await update.message.reply_text(f"{P.CROSS} Название слишком длинное (макс 100 символов).")
+        await update.message.reply_text(
+            f"{P.CROSS} Название слишком длинное (макс 100 символов)."
+        )
         return ENTERING_GROUP_NAME
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -104,9 +125,9 @@ async def save_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "• URL канала (например: `https://t.me/freelance_chat`)\n\n"
         "/done — завершить добавление\n"
         "/cancel — отмена",
-        reply_markup=_cancel_kb()
+        reply_markup=_cancel_kb(),
     )
-    context.user_data['current_group_id'] = group_id
+    context.user_data["current_group_id"] = group_id
     return ADDING_CHAT_ID
 
 
@@ -114,7 +135,7 @@ async def save_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def add_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Add a chat ID to the current group."""
     chat_id = update.message.text.strip()
-    group_id = context.user_data.get('current_group_id')
+    group_id = context.user_data.get("current_group_id")
 
     if not group_id:
         await update.message.reply_text(f"{P.CROSS} Группа не найдена. Начните заново.")
@@ -129,7 +150,7 @@ async def add_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             "Сначала добавьте бота в чат. Для канала выдайте ему права администратора, "
             "для группы — право отправлять сообщения.\n"
             "Или /done для завершения.",
-            parse_mode=None
+            parse_mode=None,
         )
         return ADDING_CHAT_ID
     resolved_id, resolved_title = resolved
@@ -140,7 +161,7 @@ async def add_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             await update.message.reply_text(
                 f"{P.CHECK} Чат `{resolved_id}` (original: {chat_id}) добавлен в группу.\n"
                 "Отправьте следующий ID или /done.",
-                parse_mode=None
+                parse_mode=None,
             )
         except (aiosqlite.Error, ValueError, TypeError, KeyError) as e:
             await update.message.reply_text(
@@ -157,11 +178,11 @@ async def _resolve_authorized_chat(text: str, context) -> tuple[str, str] | None
     text = text.strip()
 
     candidate = text
-    url_match = re.match(r'https?://t\.me/([^/]+)', text)
+    url_match = re.match(r"https?://t\.me/([^/]+)", text)
     if url_match:
         username = url_match.group(1)
-        candidate = username if username.startswith('@') else f"@{username}"
-    elif not re.match(r'^-?\d+$', text) and not text.startswith('@'):
+        candidate = username if username.startswith("@") else f"@{username}"
+    elif not re.match(r"^-?\d+$", text) and not text.startswith("@"):
         return None
 
     try:
@@ -174,9 +195,15 @@ async def _resolve_authorized_chat(text: str, context) -> tuple[str, str] | None
     status = str(membership.status)
     if status in {"left", "kicked"}:
         return None
-    if str(chat.type) == "channel" and status not in {"administrator", "creator", "owner"}:
+    if str(chat.type) == "channel" and status not in {
+        "administrator",
+        "creator",
+        "owner",
+    }:
         return None
-    if status == "restricted" and not bool(getattr(membership, "can_send_messages", False)):
+    if status == "restricted" and not bool(
+        getattr(membership, "can_send_messages", False)
+    ):
         return None
     title = chat.title or chat.full_name or chat.username or str(chat.id)
     return str(chat.id), str(title)
@@ -201,18 +228,17 @@ async def add_chat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 @owner_only
 async def done_adding_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Finish adding chats to the group."""
-    group_id = context.user_data.get('current_group_id')
+    group_id = context.user_data.get("current_group_id")
 
     async with aiosqlite.connect(DB_PATH) as db:
         members = await queries.get_chat_group_members(db, group_id)
 
     await update.message.reply_text(
-        f"{P.CHECK} Группа готова! Чатов: {len(members)}\n\n"
-        "Выберите действие:",
-        reply_markup=_main_keyboard()
+        f"{P.CHECK} Группа готова! Чатов: {len(members)}\n\n" "Выберите действие:",
+        reply_markup=_main_keyboard(),
     )
 
-    context.user_data.pop('current_group_id', None)
+    context.user_data.pop("current_group_id", None)
     return ConversationHandler.END
 
 
@@ -227,10 +253,9 @@ async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not groups:
         await query.edit_message_text(
-            f"{P.LIST} **Мои группы**\n\n"
-            "Групп пока нет. Создайте первую!",
+            f"{P.LIST} **Мои группы**\n\n" "Групп пока нет. Создайте первую!",
             reply_markup=_main_keyboard(),
-            parse_mode=None
+            parse_mode=None,
         )
         return
 
@@ -245,22 +270,24 @@ async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             members = await queries.get_chat_group_members(db, g_id)
         count = len(members)
         text += f"• **{g_name}** (ID: {g_id}) — {count} чатов\n"
-        keyboard.append([
-            inline_button(
-                f"{g_name} ({count})",
-                icon=P.EYE,
-                callback_data=f"bcast_group_detail_{g_id}",
-            ),
-            danger_button(
-                "Удалить", icon=P.TRASH, callback_data=f"bcast_group_delete_{g_id}"
-            ),
-        ])
-    keyboard.append([neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")])
+        keyboard.append(
+            [
+                inline_button(
+                    f"{g_name} ({count})",
+                    icon=P.EYE,
+                    callback_data=f"bcast_group_detail_{g_id}",
+                ),
+                danger_button(
+                    "Удалить", icon=P.TRASH, callback_data=f"bcast_group_delete_{g_id}"
+                ),
+            ]
+        )
+    keyboard.append(
+        [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")]
+    )
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=None
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
     )
 
 
@@ -298,14 +325,18 @@ async def group_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             text += f"  ... и ещё {len(members) - 20}\n"
 
     keyboard = [
-        [success_button("Добавить чат", icon=P.PLUS, callback_data=f"bcast_group_add_chat_{group_id}")],
+        [
+            success_button(
+                "Добавить чат",
+                icon=P.PLUS,
+                callback_data=f"bcast_group_add_chat_{group_id}",
+            )
+        ],
         [neutral_button("К списку", icon=P.PREV, callback_data="bcast_group_list")],
     ]
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=None
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
     )
 
 
@@ -321,12 +352,12 @@ async def group_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await queries.delete_chat_group(db, group_id)
 
     await query.edit_message_text(
-        f"{P.CHECK} Группа удалена.",
-        reply_markup=_main_keyboard()
+        f"{P.CHECK} Группа удалена.", reply_markup=_main_keyboard()
     )
 
 
 # ─── Sending ─────────────────────────────────────────────────────────
+
 
 @owner_only
 async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -339,9 +370,8 @@ async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if not groups:
         await query.edit_message_text(
-            f"{P.CROSS} Нет групп для рассылки.\n"
-            "Сначала создайте группу чатов.",
-            reply_markup=_main_keyboard()
+            f"{P.CROSS} Нет групп для рассылки.\n" "Сначала создайте группу чатов.",
+            reply_markup=_main_keyboard(),
         )
         return ConversationHandler.END
 
@@ -353,19 +383,21 @@ async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         g_name = g[2]
         async with aiosqlite.connect(DB_PATH) as db:
             members = await queries.get_chat_group_members(db, g_id)
-        keyboard.append([
-            inline_button(
-                f"{g_name} ({len(members)} чатов)",
-                icon=P.PEOPLE,
-                callback_data=f"bcast_select_group_{g_id}",
-            )
-        ])
-    keyboard.append([neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")])
+        keyboard.append(
+            [
+                inline_button(
+                    f"{g_name} ({len(members)} чатов)",
+                    icon=P.PEOPLE,
+                    callback_data=f"bcast_select_group_{g_id}",
+                )
+            ]
+        )
+    keyboard.append(
+        [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")]
+    )
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=None
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
     )
     return SELECTING_GROUP_FOR_BROADCAST
 
@@ -377,7 +409,7 @@ async def group_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
 
     group_id = int(query.data.replace("bcast_select_group_", ""))
-    context.user_data['broadcast_group_id'] = group_id
+    context.user_data["broadcast_group_id"] = group_id
 
     async with aiosqlite.connect(DB_PATH) as db:
         group = await queries.get_chat_group(db, group_id)
@@ -392,17 +424,19 @@ async def group_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "обычных сообщений без метки «переслано».\n\n"
         "/cancel — отмена",
         reply_markup=_cancel_kb(),
-        parse_mode=None
+        parse_mode=None,
     )
     return ENTERING_BROADCAST_MESSAGE
 
 
 @owner_only
-async def receive_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_broadcast_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Receive broadcast message and show preview."""
     message = update.message
-    context.user_data['broadcast_source_chat_id'] = message.chat_id
-    context.user_data['broadcast_source_message_id'] = message.message_id
+    context.user_data["broadcast_source_chat_id"] = message.chat_id
+    context.user_data["broadcast_source_message_id"] = message.message_id
 
     text = f"{P.LIST} **Предпросмотр — сообщение выше**\n\n"
     if message.text:
@@ -416,7 +450,7 @@ async def receive_broadcast_message(update: Update, context: ContextTypes.DEFAUL
     else:
         text += "Тип: копирование исходного сообщения\n"
 
-    group_id = context.user_data.get('broadcast_group_id')
+    group_id = context.user_data.get("broadcast_group_id")
 
     async with aiosqlite.connect(DB_PATH) as db:
         group = await queries.get_chat_group(db, group_id)
@@ -431,9 +465,7 @@ async def receive_broadcast_message(update: Update, context: ContextTypes.DEFAUL
     )
 
     await update.message.reply_text(
-        text,
-        reply_markup=_confirm_keyboard(),
-        parse_mode=None
+        text, reply_markup=_confirm_keyboard(), parse_mode=None
     )
     return CONFIRMING_BROADCAST
 
@@ -456,8 +488,7 @@ async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return await _enqueue_broadcast(update, context, scheduled_at=None)
     if query.data in {"bcast_confirm_no", "bcast_cancel"}:
         await query.edit_message_text(
-            f"{P.CROSS} Рассылка отменена.",
-            reply_markup=_main_keyboard()
+            f"{P.CROSS} Рассылка отменена.", reply_markup=_main_keyboard()
         )
         _clear_broadcast_draft(context)
         return ConversationHandler.END
@@ -493,9 +524,13 @@ async def _enqueue_broadcast(
     group_id = context.user_data.get("broadcast_group_id")
     source_chat_id = context.user_data.get("broadcast_source_chat_id")
     source_message_id = context.user_data.get("broadcast_source_message_id")
-    progress_message = update.callback_query.message if update.callback_query else update.message
+    progress_message = (
+        update.callback_query.message if update.callback_query else update.message
+    )
     if not group_id or source_chat_id is None or source_message_id is None:
-        await progress_message.reply_text(f"{P.CROSS} Черновик рассылки потерян. Начните заново.")
+        await progress_message.reply_text(
+            f"{P.CROSS} Черновик рассылки потерян. Начните заново."
+        )
         _clear_broadcast_draft(context)
         return ConversationHandler.END
 
@@ -516,7 +551,9 @@ async def _enqueue_broadcast(
             f"Получателей: {total}"
         )
     else:
-        text = f"📣 Рассылка #{broadcast_id} поставлена в очередь.\nПолучателей: {total}"
+        text = (
+            f"📣 Рассылка #{broadcast_id} поставлена в очередь.\nПолучателей: {total}"
+        )
 
     if update.callback_query:
         await update.callback_query.edit_message_text(text)
@@ -542,6 +579,7 @@ async def _enqueue_broadcast(
 
 # ─── History ─────────────────────────────────────────────────────────
 
+
 @owner_only
 async def broadcast_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show broadcast history."""
@@ -553,10 +591,9 @@ async def broadcast_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not broadcasts:
         await query.edit_message_text(
-            f"{P.SCROLL} **История рассылок**\n\n"
-            "Рассылок пока нет.",
+            f"{P.SCROLL} **История рассылок**\n\n" "Рассылок пока нет.",
             reply_markup=_main_keyboard(),
-            parse_mode=None
+            parse_mode=None,
         )
         return
 
@@ -568,52 +605,65 @@ async def broadcast_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         b_created = b[10]
         b_sent = b[7]
         b_failed = b[8]
-        status_emoji = f"{P.CHECK}" if b_status in {"completed", "done"} else f"{P.HOURGLASS}"
+        status_emoji = (
+            f"{P.CHECK}" if b_status in {"completed", "done"} else f"{P.HOURGLASS}"
+        )
         text += f"{status_emoji} {str(b_created)[:16]} — {b_sent} отправлено, {b_failed} ошибок\n"
     text += f"\nВсего: {len(broadcasts)}"
 
-    keyboard.append([neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")])
+    keyboard.append(
+        [neutral_button("Назад", icon=P.PREV, callback_data="back_to_main")]
+    )
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=None
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None
     )
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────
 
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the conversation."""
     _clear_broadcast_draft(context)
-    context.user_data.pop('current_group_id', None)
+    context.user_data.pop("current_group_id", None)
 
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
-            f"{P.CROSS} Операция отменена.",
-            reply_markup=_main_keyboard()
+            f"{P.CROSS} Операция отменена.", reply_markup=_main_keyboard()
         )
     else:
         await update.message.reply_text(
-            f"{P.CROSS} Операция отменена.",
-            reply_markup=_main_keyboard()
+            f"{P.CROSS} Операция отменена.", reply_markup=_main_keyboard()
         )
     return ConversationHandler.END
 
 
 def _cancel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")]
-    ])
+    return InlineKeyboardMarkup(
+        [[neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")]]
+    )
 
 
 def _confirm_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [success_button("Отправить сейчас", icon=P.CHECK, callback_data="bcast_confirm_now")],
-        [primary_button("Запланировать", icon=P.TIMER, callback_data="bcast_confirm_schedule")],
-        [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_confirm_no")],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [
+                success_button(
+                    "Отправить сейчас", icon=P.CHECK, callback_data="bcast_confirm_now"
+                )
+            ],
+            [
+                primary_button(
+                    "Запланировать",
+                    icon=P.TIMER,
+                    callback_data="bcast_confirm_schedule",
+                )
+            ],
+            [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_confirm_no")],
+        ]
+    )
 
 
 def _clear_broadcast_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -639,7 +689,9 @@ async def control_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     }[action]
     changed = await BroadcastRepository(DB_PATH).set_status(broadcast_id, target_status)
     if not changed:
-        await query.answer("Статус уже изменён или рассылка завершена.", show_alert=True)
+        await query.answer(
+            "Статус уже изменён или рассылка завершена.", show_alert=True
+        )
         return
     labels = {
         "pause": "Рассылка поставлена на паузу.",
@@ -673,7 +725,9 @@ def get_broadcast_handler() -> ConversationHandler:
                 CallbackQueryHandler(group_selected, pattern="^bcast_select_group_")
             ],
             ENTERING_BROADCAST_MESSAGE: [
-                MessageHandler(filters.ALL & ~filters.COMMAND, receive_broadcast_message),
+                MessageHandler(
+                    filters.ALL & ~filters.COMMAND, receive_broadcast_message
+                ),
             ],
             CONFIRMING_BROADCAST: [
                 CallbackQueryHandler(confirm_broadcast, pattern="^bcast_confirm_")
@@ -689,6 +743,7 @@ def get_broadcast_handler() -> ConversationHandler:
         per_user=True,
         per_chat=True,
         name="broadcast_conversation",
+        conversation_timeout=15 * 60,
     )
 
 

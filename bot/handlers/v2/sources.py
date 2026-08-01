@@ -1,4 +1,5 @@
 """Source connections management (§3.1) with tariff limits (§7)."""
+
 from typing import List
 
 from sqlalchemy import select
@@ -102,9 +103,7 @@ async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         user, _ = await get_or_create_user(session, update.effective_user)
         tier = tariffs.effective_tier(user)
         connections = await _load_connections(session, user.id)
-        exchanges = sum(
-            1 for c in connections if c.platform is not Platform.TG_CHANNEL
-        )
+        exchanges = sum(1 for c in connections if c.platform is not Platform.TG_CHANNEL)
         channels = sum(1 for c in connections if c.platform is Platform.TG_CHANNEL)
 
         if kind == "tg":
@@ -137,9 +136,7 @@ async def source_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # traceback (same pattern as collector/CRM/user creation).
         try:
             async with session.begin_nested():
-                session.add(
-                    ExchangeConnection(user_id=user.id, platform=platform)
-                )
+                session.add(ExchangeConnection(user_id=user.id, platform=platform))
                 await session.flush()
         except IntegrityError:
             await query.answer(
@@ -200,7 +197,13 @@ async def add_channel_from_text(
     """
     if update.effective_user is None or update.message is None:
         return
-    username = text.strip().split()[0]
+    parts = text.strip().split()
+    if not parts:
+        await update.message.reply_text(
+            f"{P.EXCLAMATION} Пришлите username или ссылку на Telegram-канал."
+        )
+        return
+    username = parts[0]
     username = username.split("/")[-1]
     if not username.startswith("@"):
         username = f"@{username}"
@@ -226,9 +229,7 @@ async def add_channel_from_text(
             )
         )
         channels = list(result.scalars().all())
-        existing = {
-            str(c.settings.get("channel", "")).casefold() for c in channels
-        }
+        existing = {str(c.settings.get("channel", "")).casefold() for c in channels}
         if username.casefold() in existing:
             await update.message.reply_text(f"{P.WARNING} Этот канал уже подключён.")
             return

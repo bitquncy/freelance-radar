@@ -33,6 +33,9 @@ ENV/
 *.db
 *.sqlite
 *.sqlite3
+*.dump
+backups/
+exports/
 
 # Telethon session files
 *.session

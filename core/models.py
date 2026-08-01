@@ -13,6 +13,7 @@ Deviations from the simplified spec model (documented per AGENTS.md §12.6):
     * ``Proposal.mode`` / ``Proposal.violations`` — track template vs AI
       generation and guardrail violations (§6.4).
 """
+
 import enum
 from datetime import datetime, timezone
 from typing import Any, List, Optional
@@ -125,6 +126,14 @@ class PaymentStatus(str, enum.Enum):
     REFUNDED = "refunded"
 
 
+class NotificationStatus(str, enum.Enum):
+    """Состояние доставки карточки проекта через transactional outbox."""
+
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+
+
 def _enum_col(enum_cls: type) -> Enum:
     """Portable enum column: VARCHAR + values, no native DB enum."""
     return Enum(
@@ -188,7 +197,9 @@ class ExchangeConnection(Base):
             postgresql_where=text("platform != 'tg_channel'"),
         ),
         UniqueConstraint(
-            "user_id", "platform", "normalized_identity",
+            "user_id",
+            "platform",
+            "normalized_identity",
             name="uq_connections_user_platform_identity",
         ),
     )
@@ -275,6 +286,33 @@ class ProjectAnalysis(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     project: Mapped["Project"] = relationship(back_populates="analyses")
+
+
+class NotificationDelivery(Base):
+    """Надёжная очередь Telegram-уведомлений о новых проектах."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", name="uq_notification_analysis"),
+        Index("ix_notification_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("project_analyses.id"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[NotificationStatus] = mapped_column(
+        _enum_col(NotificationStatus), default=NotificationStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Proposal(Base):

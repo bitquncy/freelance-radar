@@ -1,4 +1,5 @@
 """Unit tests for parsers."""
+
 import pytest
 
 from parsers.kwork import KworkParser
@@ -13,6 +14,7 @@ class TestKworkParser:
     def test_extract_title(self, parser):
         """Test title extraction from HTML."""
         from bs4 import BeautifulSoup
+
         html = '<html><body><h1 class="wants-card__header-title">Test Project Title</h1></body></html>'
         soup = BeautifulSoup(html, "html.parser")
         title = parser._extract_title(soup)
@@ -21,7 +23,8 @@ class TestKworkParser:
     def test_extract_title_fallback(self, parser):
         """Test title fallback to plain h1."""
         from bs4 import BeautifulSoup
-        html = '<html><body><h1>Simple Title</h1></body></html>'
+
+        html = "<html><body><h1>Simple Title</h1></body></html>"
         soup = BeautifulSoup(html, "html.parser")
         title = parser._extract_title(soup)
         assert title == "Simple Title"
@@ -29,6 +32,7 @@ class TestKworkParser:
     def test_extract_budget_range(self, parser):
         """Test budget range extraction."""
         from bs4 import BeautifulSoup
+
         html = '<html><body><div class="wants-card__header-price">15000 ₽</div></body></html>'
         soup = BeautifulSoup(html, "html.parser")
         budget_text = parser._extract_budget_text(soup)
@@ -37,6 +41,7 @@ class TestKworkParser:
     def test_extract_budget_range_with_range(self, parser):
         """Test budget range with min/max."""
         from bs4 import BeautifulSoup
+
         html = '<html><body><div class="price">10000 - 20000 ₽</div></body></html>'
         soup = BeautifulSoup(html, "html.parser")
         budget_text = parser._extract_budget_text(soup)
@@ -68,11 +73,12 @@ class TestKworkParser:
     def test_extract_category_from_breadcrumbs(self, parser):
         """Test category extraction from breadcrumbs."""
         from bs4 import BeautifulSoup
-        html = '''
+
+        html = """
         <html><body>
         <nav class="breadcrumb"><a>Home</a><a>Programming</a><a>Python</a></nav>
         </body></html>
-        '''
+        """
         soup = BeautifulSoup(html, "html.parser")
         category = parser._extract_category(soup)
         assert category == "Programming"
@@ -80,19 +86,20 @@ class TestKworkParser:
     def test_extract_skills(self, parser):
         """Test skills extraction."""
         from bs4 import BeautifulSoup
-        html = '''
+
+        html = """
         <html><body>
         <div class="skills"><a>Python</a><a>Django</a><span>PostgreSQL</span></div>
         </body></html>
-        '''
+        """
         soup = BeautifulSoup(html, "html.parser")
         skills = parser._extract_skills(soup)
         assert "Python" in skills
         assert "Django" in skills
 
-    def test_rate_limiter_status(self, parser):
+    async def test_rate_limiter_status(self, parser):
         """Test rate limiter status."""
-        status = parser.rate_limiter.get_status()
+        status = await parser.rate_limiter.get_status()
         assert "requests_today" in status
         assert "daily_limit" in status
         assert "remaining" in status

@@ -1,7 +1,8 @@
 """Kwork parser v3 — single browser, route blocking, resilient selectors, JSON extraction."""
+
 import asyncio
+import inspect
 import json
-import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +26,7 @@ from tenacity import (
 
 from parsers.base import BaseParser
 from db.models import JobVacancy
-from services.rate_limiter import KworkRateLimiter
+from services.persistent_rate_limiter import PersistentRateLimiter
 from services.logger_config import get_logger
 from config import (
     KWORK_PROJECTS_URL,
@@ -35,49 +36,6 @@ from config import (
 )
 
 logger = get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# Stealth configuration
-# ---------------------------------------------------------------------------
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-]
-
-VIEWPORTS = [
-    {"width": 1920, "height": 1080},
-    {"width": 1366, "height": 768},
-    {"width": 1440, "height": 900},
-    {"width": 1536, "height": 864},
-    {"width": 1280, "height": 720},
-]
-
-ACCEPT_LANGUAGES = [
-    "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "ru-RU,ru;q=0.9",
-]
-
-STEALTH_SCRIPTS = [
-    "() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); }",
-    "() => { window.chrome = { runtime: {} }; }",
-    "() => { Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] }); }",
-    "() => { Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'] }); }",
-    (
-        "() => { const orig = window.Notification.requestPermission;"
-        " window.Notification.requestPermission = function(cb) {"
-        " const r = 'default'; if(cb) cb(r); return Promise.resolve(r); }; }"
-    ),
-    (
-        "() => { const iframes = document.querySelectorAll('iframe');"
-        " for (const f of iframes) { try {"
-        " Object.defineProperty(f.contentWindow.navigator, 'webdriver', { get: () => undefined });"
-        " } catch(e) {} } }"
-    ),
-]
 
 # Resource types to block (ads, analytics, fonts, media)
 BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
@@ -103,23 +61,90 @@ BLOCKED_URL_PATTERNS = [
 
 # Known tech skills for keyword extraction from descriptions
 KNOWN_SKILLS = [
-    "python", "django", "flask", "fastapi", "javascript", "typescript", "react",
-    "vue", "angular", "next.js", "node.js", "php", "laravel", "wordpress",
-    "html", "css", "sql", "postgresql", "mysql", "mongodb", "redis",
-    "docker", "kubernetes", "aws", "gcp", "azure",
-    "figma", "photoshop", "illustrator", "sketch", "after effects", "premiere pro",
-    "1с", "bitrix", "telegram", "bot", "парсинг", "парсер",
-    "seo", "smm", "таргет", "контекст", "директ", "google ads",
-    "лендинг", "сайт", "дизайн", "логотип", "брендинг",
-    "копирайтинг", "рерайт", "перевод",
-    "маркетинг", "продажи", "hr", "бухгалтерия", "юриспруденция",
-    "курс", "обучение", "api", "rest", "graphql",
-    "unity", "unreal", "blender", "3d",
-    "excel", "power bi", "tableau",
-    "machine learning", "ai", "нейросеть", "gpt",
-    "тестирование", "qa", "автотесты",
-    "devops", "ci/cd", "git", "github",
-    "tailwind", "bootstrap", "scss", "sass",
+    "python",
+    "django",
+    "flask",
+    "fastapi",
+    "javascript",
+    "typescript",
+    "react",
+    "vue",
+    "angular",
+    "next.js",
+    "node.js",
+    "php",
+    "laravel",
+    "wordpress",
+    "html",
+    "css",
+    "sql",
+    "postgresql",
+    "mysql",
+    "mongodb",
+    "redis",
+    "docker",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure",
+    "figma",
+    "photoshop",
+    "illustrator",
+    "sketch",
+    "after effects",
+    "premiere pro",
+    "1с",
+    "bitrix",
+    "telegram",
+    "bot",
+    "парсинг",
+    "парсер",
+    "seo",
+    "smm",
+    "таргет",
+    "контекст",
+    "директ",
+    "google ads",
+    "лендинг",
+    "сайт",
+    "дизайн",
+    "логотип",
+    "брендинг",
+    "копирайтинг",
+    "рерайт",
+    "перевод",
+    "маркетинг",
+    "продажи",
+    "hr",
+    "бухгалтерия",
+    "юриспруденция",
+    "курс",
+    "обучение",
+    "api",
+    "rest",
+    "graphql",
+    "unity",
+    "unreal",
+    "blender",
+    "3d",
+    "excel",
+    "power bi",
+    "tableau",
+    "machine learning",
+    "ai",
+    "нейросеть",
+    "gpt",
+    "тестирование",
+    "qa",
+    "автотесты",
+    "devops",
+    "ci/cd",
+    "git",
+    "github",
+    "tailwind",
+    "bootstrap",
+    "scss",
+    "sass",
 ]
 
 DEBUG_DIR = Path("debug")
@@ -128,11 +153,17 @@ DEBUG_DIR = Path("debug")
 class KworkParser(BaseParser):
     """Kwork parser v3: single browser cycle, route blocking, resilient selectors."""
 
-    def __init__(self, max_detail_pages: Optional[int] = None):
+    def __init__(
+        self,
+        max_detail_pages: Optional[int] = None,
+        rate_limiter: Optional[object] = None,
+    ):
         self.base_url = "https://kwork.ru"
         self.max_detail_pages = max_detail_pages or KWORK_MAX_DETAIL_PAGES
-        self.rate_limiter = KworkRateLimiter(
-            daily_limit=200,
+        from config import KWORK_DAILY_REQUEST_LIMIT
+
+        self.rate_limiter = rate_limiter or PersistentRateLimiter(
+            daily_limit=KWORK_DAILY_REQUEST_LIMIT,
             delay_min=float(KWORK_REQUEST_DELAY_MIN),
             delay_max=float(KWORK_REQUEST_DELAY_MAX),
         )
@@ -149,12 +180,7 @@ class KworkParser(BaseParser):
                     self._playwright = await async_playwright().start()
                 self._browser = await self._playwright.chromium.launch(
                     headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                    ],
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
                 )
                 logger.info("kwork.browser_created")
             return self._browser
@@ -176,12 +202,38 @@ class KworkParser(BaseParser):
                 self._playwright = None
             logger.info("kwork.browser_cleaned")
 
+    async def _can_make_request(self) -> bool:
+        result = self.rate_limiter.can_make_request()  # type: ignore[attr-defined]
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
+
+    async def _reserve_request(self) -> bool:
+        acquire = getattr(self.rate_limiter, "acquire_request", None)
+        if acquire is not None:
+            result = acquire()
+            if inspect.isawaitable(result):
+                result = await result
+            return bool(result)
+        if not await self._can_make_request():
+            return False
+        result = self.rate_limiter.record_request()  # type: ignore[attr-defined]
+        if inspect.isawaitable(result):
+            await result
+        return True
+
+    async def _rate_limit_status(self) -> dict:
+        result = self.rate_limiter.get_status()  # type: ignore[attr-defined]
+        if inspect.isawaitable(result):
+            result = await result
+        return dict(result)
+
     # -----------------------------------------------------------------------
     # Stealth helpers
     # -----------------------------------------------------------------------
-    def _get_stealth_headers(self, referer: Optional[str] = None) -> dict:
+    def _get_request_headers(self, referer: Optional[str] = None) -> dict:
         headers = {
-            "Accept-Language": random.choice(ACCEPT_LANGUAGES),
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.7",
             "DNT": "1",
         }
         if referer:
@@ -189,30 +241,17 @@ class KworkParser(BaseParser):
         return headers
 
     def _get_browser_context_args(self) -> dict:
-        ua = random.choice(USER_AGENTS)
-        vp = random.choice(VIEWPORTS)
         return {
-            "viewport": vp,
-            "user_agent": ua,
+            "viewport": {"width": 1280, "height": 800},
             "locale": "ru-RU",
             "timezone_id": "Europe/Moscow",
-            "geolocation": {"latitude": 55.7558, "longitude": 37.6173},
-            "permissions": ["geolocation"],
             "color_scheme": "light",
-            "reduced_motion": "no-preference",
         }
-
-    @staticmethod
-    async def _apply_stealth(page: Page) -> None:
-        for script in STEALTH_SCRIPTS:
-            try:
-                await page.evaluate(script)
-            except PlaywrightError:
-                pass
 
     @staticmethod
     async def _block_unnecessary_requests(page: Page) -> None:
         """Block ads, analytics, trackers and heavy media resources."""
+
         async def _handler(route, request):
             url = request.url
             rtype = request.resource_type
@@ -224,6 +263,7 @@ class KworkParser(BaseParser):
                     await route.abort()
                     return
             await route.continue_()
+
         await page.route("**/*", _handler)
 
     async def _save_html_for_debug(self, page: Page, filename: str) -> None:
@@ -234,46 +274,44 @@ class KworkParser(BaseParser):
             html = await page.content()
             html_path.write_text(html, encoding="utf-8")
             await page.screenshot(path=str(png_path), full_page=True)
-            logger.info("kwork.debug_saved", html=str(html_path), screenshot=str(png_path))
+            logger.info(
+                "kwork.debug_saved", html=str(html_path), screenshot=str(png_path)
+            )
         except (PlaywrightError, OSError, TypeError) as e:
             logger.warning("kwork.debug_save_failed", filename=filename, error=str(e))
 
     async def _setup_page(self, page: Page, referer: Optional[str] = None) -> None:
-        """Apply stealth, route blocking, headers and cookies to a new page."""
-        await self._apply_stealth(page)
+        """Настроить экономную загрузку без антидетект-маскировки браузера."""
         await self._block_unnecessary_requests(page)
-        await page.set_extra_http_headers(self._get_stealth_headers(referer=referer))
-
-    @staticmethod
-    async def _human_scroll(page: Page) -> None:
-        """Simulate random human-like scrolling."""
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
-        await asyncio.sleep(random.uniform(0.5, 1.5))
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 1.5)")
-        await asyncio.sleep(random.uniform(0.5, 1.5))
+        await page.set_extra_http_headers(self._get_request_headers(referer=referer))
 
     # -----------------------------------------------------------------------
     # Public API — single browser context for entire cycle
     # -----------------------------------------------------------------------
     async def fetch_vacancies(self, limit: int = 10) -> List[JobVacancy]:
         """Fetch vacancies using a single browser instance."""
-        if not self.rate_limiter.can_make_request():
+        if not await self._can_make_request():
+            status = await self._rate_limit_status()
             logger.warning(
                 "kwork.daily_limit_reached",
                 daily_limit=self.rate_limiter.daily_limit,
-                requests_today=self.rate_limiter._requests_today,
+                requests_today=status["requests_today"],
             )
             return []
 
         browser = await self._get_browser()
         context = await browser.new_context(**self._get_browser_context_args())
         try:
-            await context.add_cookies([{
-                "name": "visited",
-                "value": "1",
-                "domain": ".kwork.ru",
-                "path": "/",
-            }])
+            await context.add_cookies(
+                [
+                    {
+                        "name": "visited",
+                        "value": "1",
+                        "domain": ".kwork.ru",
+                        "path": "/",
+                    }
+                ]
+            )
 
             cards = await self._fetch_project_cards(context)
             logger.info("kwork.project_cards_found", count=len(cards))
@@ -299,7 +337,9 @@ class KworkParser(BaseParser):
 
                     if idx < detail_count:
                         vacancy = await self._fetch_detail_from_context(
-                            context, url, basic_info=card,
+                            context,
+                            url,
+                            basic_info=card,
                         )
                     else:
                         vacancy = self._build_vacancy_from_card(card)
@@ -315,8 +355,16 @@ class KworkParser(BaseParser):
                         )
 
                     await self.rate_limiter.sleep()
-                except (PlaywrightError, ValueError, TypeError, KeyError, AttributeError) as e:
-                    logger.error("kwork.fetch_detail_error", url=card.get("url"), error=str(e))
+                except (
+                    PlaywrightError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    AttributeError,
+                ) as e:
+                    logger.error(
+                        "kwork.fetch_detail_error", url=card.get("url"), error=str(e)
+                    )
                     continue
 
             logger.info("kwork.fetch_completed", total_found=len(vacancies))
@@ -330,12 +378,16 @@ class KworkParser(BaseParser):
         browser = await self._get_browser()
         context = await browser.new_context(**self._get_browser_context_args())
         try:
-            await context.add_cookies([{
-                "name": "visited",
-                "value": "1",
-                "domain": ".kwork.ru",
-                "path": "/",
-            }])
+            await context.add_cookies(
+                [
+                    {
+                        "name": "visited",
+                        "value": "1",
+                        "domain": ".kwork.ru",
+                        "path": "/",
+                    }
+                ]
+            )
             cards = await self._fetch_project_cards(context)
             return [c["url"] for c in cards if c.get("url")]
         finally:
@@ -347,20 +399,26 @@ class KworkParser(BaseParser):
         retry=retry_if_exception_type((PlaywrightTimeout, ConnectionError, OSError)),
         reraise=True,
     )
-    async def fetch_project_detail(self, url: str, basic_info: Optional[dict] = None) -> Optional[JobVacancy]:
+    async def fetch_project_detail(
+        self, url: str, basic_info: Optional[dict] = None
+    ) -> Optional[JobVacancy]:
         """Fetch detailed project info (standalone, with its own browser)."""
-        if not self.rate_limiter.can_make_request():
+        if not await self._can_make_request():
             return None
 
         browser = await self._get_browser()
         context = await browser.new_context(**self._get_browser_context_args())
         try:
-            await context.add_cookies([{
-                "name": "visited",
-                "value": "1",
-                "domain": ".kwork.ru",
-                "path": "/",
-            }])
+            await context.add_cookies(
+                [
+                    {
+                        "name": "visited",
+                        "value": "1",
+                        "domain": ".kwork.ru",
+                        "path": "/",
+                    }
+                ]
+            )
             return await self._fetch_detail_from_context(context, url, basic_info)
         finally:
             await context.close()
@@ -375,7 +433,7 @@ class KworkParser(BaseParser):
         reraise=True,
     )
     async def _fetch_project_cards(self, context: BrowserContext) -> List[dict]:
-        if not self.rate_limiter.can_make_request():
+        if not await self._reserve_request():
             return []
 
         cards: List[dict] = []
@@ -386,16 +444,13 @@ class KworkParser(BaseParser):
 
             await page.goto(KWORK_PROJECTS_URL, wait_until="networkidle")
             try:
-                await page.wait_for_selector(".want-card", state="attached", timeout=20000)
+                await page.wait_for_selector(
+                    ".want-card", state="attached", timeout=20000
+                )
             except PlaywrightTimeout:
                 logger.warning("kwork.wait_for_cards_timeout")
-            await asyncio.sleep(random.uniform(3, 5))
-            await self._human_scroll(page)
-
             content = await page.content()
             soup = BeautifulSoup(content, "html.parser")
-            self.rate_limiter.record_request()
-
             if self._is_blocked(soup):
                 logger.error("kwork.blocked_or_captcha_list")
                 await self._save_html_for_debug(page, "blocked_list")
@@ -432,10 +487,12 @@ class KworkParser(BaseParser):
         reraise=True,
     )
     async def _fetch_detail_from_context(
-        self, context: BrowserContext, url: str,
+        self,
+        context: BrowserContext,
+        url: str,
         basic_info: Optional[dict] = None,
     ) -> Optional[JobVacancy]:
-        if not self.rate_limiter.can_make_request():
+        if not await self._reserve_request():
             return None
 
         match = re.search(r"/projects/(\d+)(?:/view)?", url)
@@ -460,22 +517,21 @@ class KworkParser(BaseParser):
                 )
             except PlaywrightTimeout:
                 logger.warning("kwork.wait_for_title_timeout", kwork_id=kwork_id)
-            await asyncio.sleep(random.uniform(3, 5))
-            await self._human_scroll(page)
-
             content = await page.content()
             soup = BeautifulSoup(content, "html.parser")
-            self.rate_limiter.record_request()
-
             if self._is_blocked(soup):
-                logger.error("kwork.blocked_or_captcha", kwork_id=kwork_id, url=full_url)
+                logger.error(
+                    "kwork.blocked_or_captcha", kwork_id=kwork_id, url=full_url
+                )
                 await self._save_html_for_debug(page, f"blocked_{kwork_id}")
                 return None
 
             # Try extracting structured JSON from <script> tags
             json_data = self._extract_json_data(soup)
 
-            title = self._extract_title(soup) or (basic_info.get("title") if basic_info else None)
+            title = self._extract_title(soup) or (
+                basic_info.get("title") if basic_info else None
+            )
             description = self._extract_description(soup)
 
             if not title:
@@ -486,13 +542,19 @@ class KworkParser(BaseParser):
             if not description and basic_info:
                 description = basic_info.get("description")
 
-            budget_text = self._extract_budget_text(soup) or (basic_info.get("budget") if basic_info else None)
+            budget_text = self._extract_budget_text(soup) or (
+                basic_info.get("budget") if basic_info else None
+            )
             budget_min, budget_max = self._extract_budget_range(soup, budget_text)
-            deadline_text = self._extract_deadline_text(soup) or (basic_info.get("deadline") if basic_info else None)
+            deadline_text = self._extract_deadline_text(soup) or (
+                basic_info.get("deadline") if basic_info else None
+            )
             deadline_days = self._extract_deadline_days(deadline_text)
             category = (
                 self._extract_category(soup)
-                or self._deep_search(json_data, ["category", "category_name", "rubric"], str)
+                or self._deep_search(
+                    json_data, ["category", "category_name", "rubric"], str
+                )
                 or (basic_info.get("category") if basic_info else None)
             )
             subcategory = (
@@ -500,10 +562,18 @@ class KworkParser(BaseParser):
                 or self._deep_search(json_data, ["subcategory", "sub_category"], str)
                 or (basic_info.get("subcategory") if basic_info else None)
             )
-            skills = self._extract_skills(soup, description=description, json_data=json_data)
-            proposals_count = self._extract_proposals_count(soup) or (basic_info.get("proposals_count") if basic_info else None)
-            customer_rating = self._extract_customer_rating(soup) or (basic_info.get("customer_rating") if basic_info else None)
-            customer_orders = self._extract_customer_orders(soup) or (basic_info.get("customer_orders") if basic_info else None)
+            skills = self._extract_skills(
+                soup, description=description, json_data=json_data
+            )
+            proposals_count = self._extract_proposals_count(soup) or (
+                basic_info.get("proposals_count") if basic_info else None
+            )
+            customer_rating = self._extract_customer_rating(soup) or (
+                basic_info.get("customer_rating") if basic_info else None
+            )
+            customer_orders = self._extract_customer_orders(soup) or (
+                basic_info.get("customer_orders") if basic_info else None
+            )
 
             return JobVacancy(
                 kwork_id=kwork_id,
@@ -632,7 +702,9 @@ class KworkParser(BaseParser):
         # Customer info
         customer_rating = None
         customer_orders = None
-        customer_el = card_el.find("div", class_=re.compile(r"payer-statistic|customer"))
+        customer_el = card_el.find(
+            "div", class_=re.compile(r"payer-statistic|customer")
+        )
         if customer_el:
             text = customer_el.get_text(separator=" ", strip=True)
             m = re.search(r"Размещено проектов на бирже:\s*(\d+)", text)
@@ -712,10 +784,16 @@ class KworkParser(BaseParser):
 
     def _extract_description(self, soup: BeautifulSoup) -> Optional[str]:
         # Primary: div with class containing description-text
-        el = soup.find("div", class_=re.compile(r"description-text|project-description"))
+        el = soup.find(
+            "div", class_=re.compile(r"description-text|project-description")
+        )
         if el:
             visible = el.find("div", class_="breakwords")
-            text = visible.get_text(separator="\n", strip=True) if visible else el.get_text(separator="\n", strip=True)
+            text = (
+                visible.get_text(separator="\n", strip=True)
+                if visible
+                else el.get_text(separator="\n", strip=True)
+            )
             return text[:3000] if text else None
         # Fallback: largest text block near h1
         h1 = soup.find("h1")
@@ -729,7 +807,9 @@ class KworkParser(BaseParser):
         return None
 
     def _extract_budget_text(self, soup: BeautifulSoup) -> Optional[str]:
-        el = soup.find("div", class_=re.compile(r"wants-card__price|project-price|price"))
+        el = soup.find(
+            "div", class_=re.compile(r"wants-card__price|project-price|price")
+        )
         if el:
             return el.get_text(strip=True)
         # Fallback regex
@@ -737,13 +817,18 @@ class KworkParser(BaseParser):
         match = re.search(r"(?:Желаемый бюджет|Цена до)[:\s]*[^\n]{1,60}", text)
         return match.group(0).strip() if match else None
 
-    def _extract_budget_range(self, soup: BeautifulSoup, budget_text: Optional[str] = None) -> Tuple[Optional[int], Optional[int]]:
+    def _extract_budget_range(
+        self, soup: BeautifulSoup, budget_text: Optional[str] = None
+    ) -> Tuple[Optional[int], Optional[int]]:
         text = budget_text or self._extract_budget_text(soup)
         return self._extract_budget_range_from_text(text)
 
     @staticmethod
-    def _extract_budget_range_from_text(text: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
+    def _extract_budget_range_from_text(
+        text: Optional[str],
+    ) -> Tuple[Optional[int], Optional[int]]:
         from parsers.utils import extract_budget_range_from_text as _extract
+
         return _extract(text)
 
     def _extract_deadline_text(self, soup: BeautifulSoup) -> Optional[str]:
@@ -751,7 +836,10 @@ class KworkParser(BaseParser):
         if informers:
             for span in informers.find_all("span"):
                 text = span.get_text(strip=True)
-                if any(k in text for k in ["Осталось", "д.", "ч.", "мин.", "день", "дня", "дней"]):
+                if any(
+                    k in text
+                    for k in ["Осталось", "д.", "ч.", "мин.", "день", "дня", "дней"]
+                ):
                     return text.replace("Осталось:", "").strip()
         # Fallback regex
         text = soup.get_text(separator=" ", strip=True)
@@ -858,7 +946,11 @@ class KworkParser(BaseParser):
                         return int(m.group(1))
         # Fallback
         text = soup.get_text(separator=" ", strip=True)
-        for pattern in [r"Предложений[:\s]*(\d+)", r"(\d+)\s*предложени", r"(\d+)\s*отклик"]:
+        for pattern in [
+            r"Предложений[:\s]*(\d+)",
+            r"(\d+)\s*предложени",
+            r"(\d+)\s*отклик",
+        ]:
             m = re.search(pattern, text, re.I)
             if m:
                 return int(m.group(1))

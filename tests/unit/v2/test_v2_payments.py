@@ -1,4 +1,5 @@
 """Telegram Payments tests — §7 pricing, idempotency, validation, weekly report."""
+
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Optional
@@ -50,8 +51,15 @@ class TestPayloadAndPricing:
 
     def test_bad_payloads_rejected(self) -> None:
         """Foreign/malformed payloads never validate."""
-        for bad in ("", "junk", "v2sub:trial:30", "v2sub:pro:999",
-                    "v2sub:pro", "other:pro:30", "v2sub:gold:30"):
+        for bad in (
+            "",
+            "junk",
+            "v2sub:trial:30",
+            "v2sub:pro:999",
+            "v2sub:pro",
+            "other:pro:30",
+            "v2sub:gold:30",
+        ):
             with pytest.raises(billing.PaymentError):
                 billing.parse_payload(bad)
 
@@ -100,9 +108,7 @@ class TestApplyPaidSubscription:
         """Switching tiers starts a fresh 30-day period."""
         user.subscription_tier = SubscriptionTier.BASIC
         user.subscription_expires_at = utcnow() + timedelta(days=300)
-        intent = billing.parse_payload(
-            billing.build_payload(SubscriptionTier.BUSINESS)
-        )
+        intent = billing.parse_payload(billing.build_payload(SubscriptionTier.BUSINESS))
         await billing.apply_paid_subscription(session, user, intent, "chg-3")
         await session.commit()
         assert user.subscription_tier is SubscriptionTier.BUSINESS
@@ -133,11 +139,13 @@ def _payment_update(
     total_amount: int,
     charge_id: str = "tg-charge-1",
     telegram_id: int = 555001,
+    currency: str = "RUB",
 ) -> SimpleNamespace:
     message = SimpleNamespace(
         successful_payment=SimpleNamespace(
             invoice_payload=payload,
             total_amount=total_amount,
+            currency=currency,
             telegram_payment_charge_id=charge_id,
             provider_payment_charge_id="prov-1",
         ),
@@ -151,11 +159,14 @@ def _payment_update(
     )
 
 
-def _precheckout_update(payload: str, total_amount: int) -> SimpleNamespace:
+def _precheckout_update(
+    payload: str, total_amount: int, currency: str = "RUB"
+) -> SimpleNamespace:
     return SimpleNamespace(
         pre_checkout_query=SimpleNamespace(
             invoice_payload=payload,
             total_amount=total_amount,
+            currency=currency,
             answer=AsyncMock(),
         )
     )
@@ -182,9 +193,7 @@ class TestPaymentHandlers:
         """Invoice carries the server-side price in kopecks and our payload."""
         from config import get_config
 
-        monkeypatch.setattr(
-            get_config(), "PAYMENT_PROVIDER_TOKEN", "live-token"
-        )
+        monkeypatch.setattr(get_config(), "PAYMENT_PROVIDER_TOKEN", "live-token")
         update = make_update(callback_data="v2sub:buy:business")
         context = make_context()
         context.bot = SimpleNamespace(send_invoice=AsyncMock())
@@ -204,17 +213,17 @@ class TestPaymentHandlers:
         await precheckout(bad, make_context())  # type: ignore[arg-type]
         assert bad.pre_checkout_query.answer.await_args.kwargs["ok"] is False
 
-    async def test_successful_payment_activates(
-        self, session_factory, user
-    ) -> None:
+        wrong_currency = _precheckout_update("v2sub:pro:30", 30000, "USD")
+        await precheckout(wrong_currency, make_context())  # type: ignore[arg-type]
+        assert wrong_currency.pre_checkout_query.answer.await_args.kwargs["ok"] is False
+
+    async def test_successful_payment_activates(self, session_factory, user) -> None:
         """The happy path: charge confirmed → tier active, receipt reply."""
         update = _payment_update("v2sub:pro:30", 30000, "tg-ok-1")
         await on_successful_payment(update, make_context())  # type: ignore[arg-type]
         async with session_factory() as check:
             row = (
-                await check.execute(
-                    select(User).where(User.telegram_id == 555001)
-                )
+                await check.execute(select(User).where(User.telegram_id == 555001))
             ).scalar_one()
             subs = (await check.execute(select(Subscription))).scalars().all()
         assert row.subscription_tier is SubscriptionTier.PRO
@@ -244,9 +253,7 @@ class TestPaymentHandlers:
         await on_successful_payment(update, make_context())  # type: ignore[arg-type]
         async with session_factory() as check:
             row = (
-                await check.execute(
-                    select(User).where(User.telegram_id == 555001)
-                )
+                await check.execute(select(User).where(User.telegram_id == 555001))
             ).scalar_one()
             subs = (await check.execute(select(Subscription))).scalars().all()
         assert row.subscription_tier is SubscriptionTier.TRIAL  # unchanged
