@@ -886,8 +886,21 @@ async def add_chat_to_group(
 ) -> None:
     """Add a chat to a group."""
     await db.execute(
-        "INSERT INTO chat_group_members (group_id, chat_id, chat_title, added_at) VALUES (?, ?, ?, ?)",
-        (group_id, chat_id, chat_title, datetime.now().isoformat()),
+        """
+        INSERT INTO chat_group_members (group_id, chat_id, chat_title, added_at)
+        SELECT ?, ?, ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM chat_group_members WHERE group_id = ? AND chat_id = ?
+        )
+        """,
+        (
+            group_id,
+            chat_id,
+            chat_title,
+            datetime.now().isoformat(),
+            group_id,
+            chat_id,
+        ),
     )
     await db.commit()
 
@@ -898,7 +911,11 @@ async def get_chat_group_members(
 ) -> List:
     """Get all members of a chat group."""
     async with db.execute(
-        "SELECT id, group_id, chat_id, chat_title, added_at FROM chat_group_members WHERE group_id = ?",
+        """
+        SELECT id, group_id, chat_id, chat_title, added_at
+        FROM chat_group_members
+        WHERE group_id = ? AND is_active = 1
+        """,
         (group_id,),
     ) as cursor:
         rows = await cursor.fetchall()
