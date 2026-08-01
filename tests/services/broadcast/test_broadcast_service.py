@@ -298,3 +298,45 @@ async def test_migration_creates_durable_queue_schema(
 
     assert {"source_chat_id", "source_message_id", "scheduled_at", "blocked_count"} <= columns
     assert target_table == ("broadcast_targets",)
+
+
+@pytest.mark.asyncio
+async def test_migration_upgrades_existing_broadcast_table_before_indexing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production may already have the legacy table without scheduled_at."""
+    db_path = str(tmp_path / "legacy-broadcast.db")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE broadcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                group_id INTEGER NOT NULL,
+                message_text TEXT,
+                message_type TEXT NOT NULL DEFAULT 'text',
+                file_id TEXT,
+                caption TEXT,
+                sent_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.commit()
+
+    monkeypatch.setattr(init_db, "DB_PATH", db_path)
+    await init_db.init_and_migrate()
+
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute("PRAGMA table_info(broadcasts)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_broadcasts_status_scheduled'"
+        )
+        index = await cursor.fetchone()
+
+    assert "scheduled_at" in columns
+    assert index == ("idx_broadcasts_status_scheduled",)
