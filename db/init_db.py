@@ -201,6 +201,9 @@ async def init_database() -> None:
                 group_id INTEGER NOT NULL,
                 chat_id TEXT NOT NULL,
                 chat_title TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                deactivated_reason TEXT,
+                last_broadcast_at TEXT,
                 added_at TEXT NOT NULL,
                 FOREIGN KEY (group_id) REFERENCES chat_groups(id) ON DELETE CASCADE
             )
@@ -218,9 +221,39 @@ async def init_database() -> None:
                 caption TEXT,
                 sent_count INTEGER NOT NULL DEFAULT 0,
                 failed_count INTEGER NOT NULL DEFAULT 0,
+                blocked_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                total_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'pending',
+                source_chat_id TEXT,
+                source_message_id INTEGER,
+                scheduled_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                disable_notification INTEGER NOT NULL DEFAULT 0,
+                protect_content INTEGER NOT NULL DEFAULT 0,
+                progress_chat_id TEXT,
+                progress_message_id INTEGER,
+                last_error TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (group_id) REFERENCES chat_groups(id)
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broadcast_id INTEGER NOT NULL,
+                chat_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error_code TEXT,
+                error_message TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                claimed_at TEXT,
+                sent_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (broadcast_id) REFERENCES broadcasts(id) ON DELETE CASCADE,
+                UNIQUE(broadcast_id, chat_id)
             )
         """)
 
@@ -250,6 +283,8 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sources_enabled ON sources(enabled)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_profile_user ON freelancer_profile(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcasts_status_scheduled ON broadcasts(status, scheduled_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcast_targets_status ON broadcast_targets(broadcast_id, status)")
 
         await db.commit()
         logger.info("Database initialized successfully")
@@ -386,6 +421,68 @@ async def run_migrations() -> None:
                 await db.execute("ALTER TABLE sources ADD COLUMN urls TEXT")
         except (aiosqlite.Error, ValueError, TypeError, OSError) as e:
             logger.warning("db.sources_migration_failed", error=str(e))
+
+        # Migration: durable, restart-safe broadcast queue.
+        broadcast_columns = {
+            "blocked_count": "INTEGER NOT NULL DEFAULT 0",
+            "skipped_count": "INTEGER NOT NULL DEFAULT 0",
+            "total_count": "INTEGER NOT NULL DEFAULT 0",
+            "source_chat_id": "TEXT",
+            "source_message_id": "INTEGER",
+            "scheduled_at": "TEXT",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+            "disable_notification": "INTEGER NOT NULL DEFAULT 0",
+            "protect_content": "INTEGER NOT NULL DEFAULT 0",
+            "progress_chat_id": "TEXT",
+            "progress_message_id": "INTEGER",
+            "last_error": "TEXT",
+        }
+        cursor = await db.execute("PRAGMA table_info(broadcasts)")
+        existing_broadcast_columns = {row[1] for row in await cursor.fetchall()}
+        for col_name, col_type in broadcast_columns.items():
+            if col_name not in existing_broadcast_columns:
+                await db.execute(
+                    f"ALTER TABLE broadcasts ADD COLUMN {col_name} {col_type}"
+                )
+
+        member_columns = {
+            "is_active": "INTEGER NOT NULL DEFAULT 1",
+            "deactivated_reason": "TEXT",
+            "last_broadcast_at": "TEXT",
+        }
+        cursor = await db.execute("PRAGMA table_info(chat_group_members)")
+        existing_member_columns = {row[1] for row in await cursor.fetchall()}
+        for col_name, col_type in member_columns.items():
+            if col_name not in existing_member_columns:
+                await db.execute(
+                    f"ALTER TABLE chat_group_members ADD COLUMN {col_name} {col_type}"
+                )
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broadcast_id INTEGER NOT NULL,
+                chat_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error_code TEXT,
+                error_message TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                claimed_at TEXT,
+                sent_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (broadcast_id) REFERENCES broadcasts(id) ON DELETE CASCADE,
+                UNIQUE(broadcast_id, chat_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_broadcasts_status_scheduled "
+            "ON broadcasts(status, scheduled_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_broadcast_targets_status "
+            "ON broadcast_targets(broadcast_id, status)"
+        )
 
         # Rebuild FTS index if table is empty but vacancies exist
         cursor = await db.execute("SELECT COUNT(*) FROM vacancies_fts")

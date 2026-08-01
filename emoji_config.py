@@ -410,6 +410,11 @@ def danger_button(text: str, *, icon: str = "", **kwargs: Any) -> InlineKeyboard
     return inline_button(text, style="danger", icon=icon, **kwargs)
 
 
+def neutral_button(text: str, *, icon: str = "", **kwargs: Any) -> InlineKeyboardButton:
+    """Обычная кнопка для навигации и второстепенных действий."""
+    return inline_button(text, icon=icon, **kwargs)
+
+
 def strip_html_emoji(text: str) -> str:
     """Убрать теги ``<tg-emoji>``, оставив Unicode внутри.
 

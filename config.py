@@ -45,6 +45,29 @@ class Config(BaseSettings):
     # Default Settings
     DEFAULT_COOLDOWN_SEC: int = Field(default=3600, ge=0, description="Default cooldown")
 
+    # Safe broadcast settings. The bot only posts to explicitly configured
+    # destinations where it already has permission to send messages.
+    BROADCAST_RATE_LIMIT: int = Field(
+        default=10, ge=1, le=25, description="Maximum broadcast messages per second"
+    )
+    BROADCAST_BATCH_SIZE: int = Field(
+        default=10, ge=1, le=25, description="Maximum targets processed concurrently"
+    )
+    BROADCAST_MAX_RETRIES: int = Field(
+        default=3, ge=0, le=5, description="Retries for transient Telegram errors"
+    )
+    BROADCAST_PROGRESS_INTERVAL: int = Field(
+        default=5, ge=5, le=60, description="Seconds between progress message edits"
+    )
+    BROADCAST_MIN_CHAT_INTERVAL_SEC: int = Field(
+        default=3600,
+        ge=60,
+        description="Minimum interval between broadcast posts to one chat",
+    )
+    BROADCAST_TIMEZONE: str = Field(
+        default="Asia/Yekaterinburg", description="Timezone used by broadcast scheduling UX"
+    )
+
     # User-Agent for HTTP requests
     USER_AGENT: str = Field(
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -148,6 +171,12 @@ KWORK_MAX_PAGES = get_config().KWORK_MAX_PAGES
 KWORK_MAX_DETAIL_PAGES = get_config().KWORK_MAX_DETAIL_PAGES
 MONITOR_INTERVAL_MINUTES = get_config().MONITOR_INTERVAL_MINUTES
 DEFAULT_COOLDOWN_SEC = get_config().DEFAULT_COOLDOWN_SEC
+BROADCAST_RATE_LIMIT = get_config().BROADCAST_RATE_LIMIT
+BROADCAST_BATCH_SIZE = get_config().BROADCAST_BATCH_SIZE
+BROADCAST_MAX_RETRIES = get_config().BROADCAST_MAX_RETRIES
+BROADCAST_PROGRESS_INTERVAL = get_config().BROADCAST_PROGRESS_INTERVAL
+BROADCAST_MIN_CHAT_INTERVAL_SEC = get_config().BROADCAST_MIN_CHAT_INTERVAL_SEC
+BROADCAST_TIMEZONE = get_config().BROADCAST_TIMEZONE
 USER_AGENT = get_config().USER_AGENT
 
 

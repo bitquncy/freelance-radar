@@ -222,6 +222,21 @@ def main() -> None:
         builder = builder.post_shutdown(_v2_post_shutdown)
     application = builder.build()
 
+    # Durable Bot API broadcast queue. It is intentionally separate from the
+    # read-only Telethon monitoring session required by AGENTS.md §8.
+    from services.broadcast import BroadcastRepository, BroadcastRunner
+
+    broadcast_runner = BroadcastRunner(
+        bot=application.bot,
+        repository=BroadcastRepository(config.DB_PATH),
+        rate_limit=config.BROADCAST_RATE_LIMIT,
+        batch_size=config.BROADCAST_BATCH_SIZE,
+        max_retries=config.BROADCAST_MAX_RETRIES,
+        progress_interval=config.BROADCAST_PROGRESS_INTERVAL,
+        min_chat_interval_sec=config.BROADCAST_MIN_CHAT_INTERVAL_SEC,
+    )
+    application.bot_data["broadcast_runner"] = broadcast_runner
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("check", check_sources_command))
@@ -259,6 +274,11 @@ def main() -> None:
     for handler in get_jobs_handlers():
         application.add_handler(handler)
 
+    from bot.handlers.broadcast_handler import get_broadcast_handlers
+
+    for handler in get_broadcast_handlers():
+        application.add_handler(handler)
+
     if v2_enabled:
         from bot.handlers.v2 import register_v2_handlers
         register_v2_handlers(application)
@@ -286,6 +306,14 @@ def main() -> None:
         "interval",
         hours=1,
         id="cleanup_blacklist",
+    )
+    scheduler.add_job(
+        broadcast_runner.run_due,
+        "interval",
+        seconds=5,
+        id="broadcast_queue",
+        max_instances=1,
+        coalesce=True,
     )
     if v2_enabled:
         from monitoring.worker import register_v2_jobs
