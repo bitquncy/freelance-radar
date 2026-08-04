@@ -38,6 +38,17 @@ class Config(BaseSettings):
         default=None, description="Telegram API hash (optional)"
     )
 
+    # Telethon dedicated account for owner groups (§8)
+    TELETHON_API_ID: Optional[int] = Field(
+        default=None, description="Telethon API ID for owner groups"
+    )
+    TELETHON_API_HASH: Optional[str] = Field(
+        default=None, description="Telethon API hash for owner groups"
+    )
+    TELETHON_SESSION_NAME: str = Field(
+        default="owner_session", description="Telethon session name for owner groups"
+    )
+
     # Database Configuration
     DB_PATH: str = Field(
         default="freelance_radar.db", description="SQLite database path"

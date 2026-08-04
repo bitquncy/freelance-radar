@@ -27,7 +27,6 @@ class OwnerGroup:
 
 
 def _session_configured() -> bool:
-    """Telethon-настройки выделенного аккаунта заданы полностью."""
     config = get_config()
     return bool(
         config.TELETHON_API_ID
