@@ -541,6 +541,35 @@ class TestSchedulerResilience:
             assert job["misfire_grace_time"] >= JOB_MISFIRE_GRACE_SECONDS
 
 
+class TestProductionConfig:
+    def test_requires_postgres_redis_and_single_replica(self) -> None:
+        """Production startup rejects unsafe distributed configuration."""
+        from config import Config
+
+        config = Config(
+            BOT_TOKEN="test",
+            OWNER_CHAT_ID=1,
+            ENVIRONMENT="production",
+            DATABASE_URL="sqlite+aiosqlite:///unsafe.db",
+            REDIS_URL=None,
+            BOT_REPLICAS=2,
+            _env_file=None,
+        )
+        with pytest.raises(ValueError, match="DATABASE_URL.*REDIS_URL.*BOT_REPLICAS"):
+            config.validate()
+
+        safe = Config(
+            BOT_TOKEN="test",
+            OWNER_CHAT_ID=1,
+            ENVIRONMENT="production",
+            DATABASE_URL="postgresql+asyncpg://radar:secret@db/radar",
+            REDIS_URL="redis://redis:6379/0",
+            BOT_REPLICAS=1,
+            _env_file=None,
+        )
+        safe.validate()
+
+
 class TestStartupSequence:
     def test_migrations_preserve_event_loop(self, tmp_path, monkeypatch) -> None:
         """REVIEW #1: alembic's asyncio.run must not kill the caller's loop.

@@ -13,7 +13,6 @@ import json
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
-from html import escape as html_escape
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 

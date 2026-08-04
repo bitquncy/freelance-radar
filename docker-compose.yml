@@ -14,6 +14,18 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   bot:
     build: .
     restart: unless-stopped
@@ -22,13 +34,18 @@ services:
       ENVIRONMENT: production
       BOT_REPLICAS: "1"
       RADAR_V2_ENABLED: "true"
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-freelanceradar}
+      # Supply a URL-encoded DSN explicitly. Compose cannot safely encode
+      # reserved URI characters from POSTGRES_PASSWORD.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL with URL-encoded credentials is required}
+      REDIS_URL: redis://redis:6379/0
       PTB_STATE_DIR: /app/data
       DATA_DIR: /app/data
     volumes:
       - botdata:/app/data
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "/app/healthcheck.py"]
@@ -42,4 +59,5 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   botdata:

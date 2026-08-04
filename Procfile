@@ -1,1 +1,1 @@
-worker: python main.py
+worker: sh scripts/start-production.sh

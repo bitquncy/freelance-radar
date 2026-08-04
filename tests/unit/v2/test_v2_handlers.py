@@ -219,12 +219,14 @@ class TestProposalFlow:
     async def test_ai_mode_for_trial(
         self,
         session_factory,
+        session: AsyncSession,
         user,
         portfolio,
         project,
         monkeypatch,
     ) -> None:
         """Trial (Pro-level) → AI generation with guardrails."""
+        await self._add_analysis(session, user, project)
         monkeypatch.setattr(
             proposals_module,
             "get_shared_llm_client",
@@ -239,9 +241,10 @@ class TestProposalFlow:
         assert proposal.generated_text == GOOD_PROPOSAL
 
     async def test_ai_without_portfolio_refuses(
-        self, session_factory, user, project, monkeypatch
+        self, session_factory, session: AsyncSession, user, project, monkeypatch
     ) -> None:
         """§6.4: no portfolio → guardrail refusal, no Proposal row."""
+        await self._add_analysis(session, user, project)
         monkeypatch.setattr(
             proposals_module,
             "get_shared_llm_client",

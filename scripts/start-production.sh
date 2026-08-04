@@ -16,9 +16,6 @@ if [ "${ENVIRONMENT:-development}" = "production" ]; then
   fi
 fi
 
-mkdir -p "${DATA_DIR:-/app/data}" /app/logs
-if [ "${RADAR_V2_ENABLED:-false}" = "true" ]; then
-  python -m alembic upgrade head
-fi
+python -m alembic upgrade head
 python db/init_db.py
-exec "$@"
+exec python main.py

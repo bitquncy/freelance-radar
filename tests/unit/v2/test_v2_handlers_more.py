@@ -32,6 +32,7 @@ from core.models import (
     ExchangeConnection,
     Platform,
     PortfolioItem,
+    ProjectAnalysis,
     Proposal,
     ProposalMode,
     ProposalStatus,
@@ -46,6 +47,14 @@ from tests.unit.v2.conftest import (
 )
 
 OWNER_ID = 123456789
+
+
+async def _grant_project_visibility(
+    session: AsyncSession, user, project
+) -> None:
+    """Create the per-user analysis used by the IDOR visibility guard."""
+    session.add(ProjectAnalysis(project_id=project.id, user_id=user.id))
+    await session.commit()
 
 
 class TestProposalEdges:
@@ -97,9 +106,16 @@ class TestProposalEdges:
         assert update.callback_query.answer.await_args.kwargs.get("show_alert")
 
     async def test_generate_llm_error_is_soft(
-        self, session_factory, user, portfolio, project, monkeypatch
+        self,
+        session_factory,
+        session: AsyncSession,
+        user,
+        portfolio,
+        project,
+        monkeypatch,
     ) -> None:
         """LLM outage → friendly message, no crash, no row."""
+        await _grant_project_visibility(session, user, project)
 
         class BoomLLM(OpenRouterClient):
             def __init__(self) -> None:
@@ -148,16 +164,26 @@ class TestProposalEdges:
         answer_text = update.callback_query.answer.await_args.args[0]
         assert "Уже" in answer_text
 
-    async def test_hide_deletes_card(self, session_factory, user) -> None:
-        """🙈 Скрыть removes the notification message."""
-        update = make_update(callback_data="v2p:hide:1")
+    async def test_hide_deletes_card(
+        self, session_factory, session: AsyncSession, user, project
+    ) -> None:
+        """🙈 Скрыть removes a visible project's notification message."""
+        await _grant_project_visibility(session, user, project)
+        update = make_update(callback_data=f"v2p:hide:{project.id}")
         await proposal_hide(update, make_context())
         update.callback_query.message.delete.assert_awaited()
 
     async def test_cases_lists_relevant_portfolio(
-        self, session_factory, user, portfolio, project, monkeypatch
+        self,
+        session_factory,
+        session: AsyncSession,
+        user,
+        portfolio,
+        project,
+        monkeypatch,
     ) -> None:
         """🧩 Кейсы под заказ (§3.6) — cases without LLM intro."""
+        await _grant_project_visibility(session, user, project)
         monkeypatch.setattr(
             proposals_module, "get_shared_llm_client", lambda: None
         )
@@ -336,9 +362,16 @@ class TestProposalGuards:
         assert "Лимит" in reply
 
     async def test_cases_with_llm_intro(
-        self, session_factory, user, portfolio, project, monkeypatch
+        self,
+        session_factory,
+        session: AsyncSession,
+        user,
+        portfolio,
+        project,
+        monkeypatch,
     ) -> None:
         """§3.6: adapted intro line rendered when LLM is available."""
+        await _grant_project_visibility(session, user, project)
         monkeypatch.setattr(
             proposals_module,
             "get_shared_llm_client",
@@ -513,9 +546,16 @@ class TestProposalNotFoundAndGuards:
         assert row is not None and row.generated_text == "стабильный"
 
     async def test_cases_intro_llm_error_still_lists_cases(
-        self, session_factory, user, portfolio, project, monkeypatch
+        self,
+        session_factory,
+        session: AsyncSession,
+        user,
+        portfolio,
+        project,
+        monkeypatch,
     ) -> None:
         """Intro generation failure degrades gracefully (§3.6)."""
+        await _grant_project_visibility(session, user, project)
 
         class BoomLLM(OpenRouterClient):
             def __init__(self) -> None:

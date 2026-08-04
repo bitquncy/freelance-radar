@@ -180,7 +180,14 @@ class Config(BaseSettings):
             errors.append("BOT_TOKEN is not set")
         if not self.OWNER_CHAT_ID:
             errors.append("OWNER_CHAT_ID is not set")
-        # OPENAI_API_KEY is optional for testing
+        # OPENAI_API_KEY is optional for testing.
+        if self.ENVIRONMENT.casefold() == "production":
+            if not self.DATABASE_URL.startswith(("postgresql", "postgres://")):
+                errors.append("DATABASE_URL must use PostgreSQL in production")
+            if not self.REDIS_URL:
+                errors.append("REDIS_URL is required in production")
+            if self.BOT_REPLICAS != 1:
+                errors.append("BOT_REPLICAS must be 1 in production")
         if errors:
             raise ValueError(f"Configuration errors: {', '.join(errors)}")
 

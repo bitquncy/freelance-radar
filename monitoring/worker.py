@@ -660,6 +660,7 @@ async def _claim_due_reminder(
                 .where(
                     Reminder.id == reminder_id,
                     Reminder.status == ReminderStatus.PENDING,
+                    Reminder.due_at <= utcnow(),
                 )
                 .with_for_update(skip_locked=True)
             )
