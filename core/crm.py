@@ -106,6 +106,30 @@ async def log_interaction(
     return interaction
 
 
+async def update_client(
+    session: AsyncSession,
+    client: Client,
+    name: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Client:
+    """Update mutable client fields with audit trail (M-5)."""
+    changes = []
+    if name is not None and name != client.name:
+        changes.append(f"name: «{client.name}» → «{name}»")
+        client.name = name
+    if notes is not None and notes != client.notes:
+        changes.append("notes updated")
+        client.notes = notes
+    if changes:
+        await log_interaction(
+            session, client, InteractionType.NOTE,
+            "updated: " + "; ".join(changes),
+            touch_contact=True,
+        )
+    await session.flush()
+    return client
+
+
 async def change_stage(
     session: AsyncSession,
     client: Client,

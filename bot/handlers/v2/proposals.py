@@ -31,6 +31,7 @@ from core.generation import (
 )
 from core.llm import LLMError, get_shared_llm_client
 from core.models import (
+    NotificationDelivery,
     PortfolioItem,
     Project,
     ProjectAnalysis,
@@ -50,6 +51,85 @@ async def _load_portfolio(session: AsyncSession, user_id: int) -> List[Portfolio
         select(PortfolioItem).where(PortfolioItem.user_id == user_id)
     )
     return list(result.scalars().all())
+
+
+async def _project_visible_to_user(
+    session: AsyncSession, project_id: int, user_id: int
+) -> bool:
+    """Authorize that ``project_id`` is visible to ``user_id`` (§8 data isolation).
+
+    A project is a global row inserted by the collector, so ``session.get`` alone
+    is an IDOR: a forged ``v2p:gen:<foreign_id>`` would disclose another
+    tenant's title/description in the generated proposal card. Visibility is
+    established only when the project was actually delivered to the user
+    (``NotificationDelivery``) or analyzed for them (``ProjectAnalysis``) — both
+    are created by the worker strictly from the user's own connections.
+    """
+    delivered = (
+        await session.execute(
+            select(NotificationDelivery.id)
+            .where(
+                NotificationDelivery.project_id == project_id,
+                NotificationDelivery.user_id == user_id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if delivered is not None:
+        return True
+    analyzed = (
+        await session.execute(
+            select(ProjectAnalysis.id)
+            .where(
+                ProjectAnalysis.project_id == project_id,
+                ProjectAnalysis.user_id == user_id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return analyzed is not None
+
+
+#: Per-user cooldown between AI-generating actions (S-11). Prevents a single
+#: user from burning OpenRouter tokens by spam-tapping «Отклики»/«Ещё вариант».
+AI_ACTION_COOLDOWN_SECONDS = 60.0
+#: Maximum AI-generation calls per user per hour (rate-limit budget, CR-5).
+AI_GENERATION_LIMIT_PER_HOUR = 10
+
+
+def _ai_cooldown_active(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Return True if the user is still within the AI-action cooldown window."""
+    data = context.user_data or {}
+    last = data.get("v2_ai_action_at")
+    if last is None:
+        return False
+    elapsed = (utcnow() - last).total_seconds()
+    if elapsed < AI_ACTION_COOLDOWN_SECONDS:
+        return True
+    return False
+
+
+def _mark_ai_action(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stamp the AI-action cooldown and increment the hourly counter."""
+    data = context.user_data or {}
+    data["v2_ai_action_at"] = utcnow()
+    hour_key = "v2_ai_gen_hour"
+    hour_stamp = data.get("v2_ai_gen_hour_stamp", 0)
+    now_ts = int(utcnow().timestamp())
+    if now_ts - hour_stamp >= 3600:
+        data[hour_key] = 0
+        data["v2_ai_gen_hour_stamp"] = now_ts
+    data[hour_key] = data.get(hour_key, 0) + 1
+
+
+def _ai_hourly_limit_exceeded(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Return True if the user has exceeded the hourly AI-generation budget."""
+    data = context.user_data or {}
+    hour_stamp = data.get("v2_ai_gen_hour_stamp", 0)
+    now_ts = int(utcnow().timestamp())
+    if now_ts - hour_stamp >= 3600:
+        return False
+    return data.get("v2_ai_gen_hour", 0) >= AI_GENERATION_LIMIT_PER_HOUR
 
 
 async def _latest_analysis(
@@ -111,14 +191,55 @@ async def proposal_generate(
         if tier is None:
             await deny_no_access(update)
             return
+        if not await _project_visible_to_user(session, project_id, user.id):
+            await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
+            return
         project = await session.get(Project, project_id)
         if project is None:
             await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
             return
+        # T-4: a quick double-tap on «Отклики» used to create two drafts for the
+        # same (project, user). Reuse an existing DRAFT without a new LLM call.
+        existing = (
+            await session.execute(
+                select(Proposal)
+                .where(
+                    Proposal.project_id == project.id,
+                    Proposal.user_id == user.id,
+                    Proposal.status == ProposalStatus.DRAFT,
+                )
+                .order_by(desc(Proposal.id))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        ai_enabled = tariffs.can_use_ai_generation(tier)
+        if existing is not None:
+            # A draft already exists — show it without regenerating (saves LLM
+            # tokens on a double-tap). The user can «Редактировать»/«Ещё вариант».
+            await query.answer()
+            await query.message.reply_text(  # type: ignore[union-attr]
+                proposal_card(existing, project),
+                parse_mode="HTML",
+                reply_markup=proposal_keyboard(existing.id, ai_enabled),
+            )
+            return
+        # S-11: per-user cooldown on AI-generating actions (token-abuse guard).
+        if _ai_cooldown_active(context):
+            await query.answer(
+                f"{P.HOURGLASS} Подождите немного — предыдущий отклик ещё готовится.",
+                show_alert=True,
+            )
+            return
+        if _ai_hourly_limit_exceeded(context):
+            await query.answer(
+                f"{P.HOURGLASS} Лимит генераций в час исчерпан — попробуйте позже.",
+                show_alert=True,
+            )
+            return
         portfolio = await _load_portfolio(session, user.id)
         analysis = await _latest_analysis(session, project.id, user.id)
-        ai_enabled = tariffs.can_use_ai_generation(tier)
         await query.answer(f"{P.WRITING} Готовлю отклик…")
+        _mark_ai_action(context)
         try:
             text, mode, violations = await _build_proposal_text(
                 project, user, portfolio, analysis, ai_enabled
@@ -169,6 +290,13 @@ async def proposal_regenerate(
                 f"{P.LOCK} Перегенерация доступна на Радар PRO.", show_alert=True
             )
             return
+        # S-11: per-user cooldown on AI-generating actions (token-abuse guard).
+        if _ai_cooldown_active(context):
+            await query.answer(
+                f"{P.HOURGLASS} Подождите немного — предыдущий вариант ещё готовится.",
+                show_alert=True,
+            )
+            return
         project = await session.get(Project, proposal.project_id)
         if project is None:
             await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
@@ -176,6 +304,7 @@ async def proposal_regenerate(
         portfolio = await _load_portfolio(session, user.id)
         analysis = await _latest_analysis(session, project.id, user.id)
         await query.answer(f"{P.RELOAD} Генерирую новый вариант…")
+        _mark_ai_action(context)
         try:
             text, mode, violations = await _build_proposal_text(
                 project, user, portfolio, analysis, ai_enabled=True
@@ -318,10 +447,31 @@ async def proposal_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def proposal_hide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle «🙈 Скрыть» under a project card."""
+    """Handle «🙈 Скрыть» under a project card.
+
+    Authorization (BL-7): the callback carries a project id; we require an
+    authenticated user, an active subscription, and that the project is visible
+    to that user — otherwise an expired/non-subscriber could forge the callback
+    to delete arbitrary bot messages carrying a ``v2p:hide:<id>`` payload.
+    """
     query = update.callback_query
-    if query is None:
+    if query is None or query.data is None or update.effective_user is None:
         return
+    try:
+        project_id = int(query.data.split(":")[2])
+    except (IndexError, ValueError):
+        await query.answer()
+        return
+    factory = get_session_factory()
+    async with factory() as session:
+        user, _ = await get_or_create_user(session, update.effective_user)
+        if tariffs.effective_tier(user) is None:
+            await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
+            return
+        if not await _project_visible_to_user(session, project_id, user.id):
+            await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
+            return
+        await session.commit()
     await query.answer(f"{P.HIDE} Скрыто.")
     delete = getattr(query.message, "delete", None)
     if delete is not None:
@@ -344,6 +494,9 @@ async def proposal_cases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"{P.LOCK} Адаптация портфолио доступна на Радар PRO.", show_alert=True
             )
             return
+        if not await _project_visible_to_user(session, project_id, user.id):
+            await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
+            return
         project = await session.get(Project, project_id)
         if project is None:
             await query.answer(f"{P.CROSS} Заказ не найден.", show_alert=True)
@@ -361,6 +514,14 @@ async def proposal_cases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         intro = ""
         llm = get_shared_llm_client()
         if llm is not None:
+            # S-11: per-user cooldown when an LLM intro will be generated.
+            if _ai_cooldown_active(context):
+                await query.answer(
+                    f"{P.HOURGLASS} Подождите немного — предыдущая адаптация ещё готовится.",
+                    show_alert=True,
+                )
+                return
+            _mark_ai_action(context)
             try:
                 from config import get_config
 

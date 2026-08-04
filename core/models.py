@@ -72,6 +72,20 @@ class ConnectionStatus(str, enum.Enum):
     ERROR = "error"
 
 
+class SortPreference(str, enum.Enum):
+    """Per-user order of delivered/listed order cards (task_0004).
+
+    ``DEFAULT`` keeps the as-arrived (insertion) order — the behaviour users
+    with no explicit preference have always had. The remaining modes sort
+    each user's cards by the indicated metric, newest/highest first.
+    """
+
+    DEFAULT = "default"
+    SCORE = "score"  # win probability desc
+    PROFITABILITY = "profitability"  # profitability_index desc
+    FRESHNESS = "freshness"  # posted_at desc (newest first)
+
+
 class ProposalStatus(str, enum.Enum):
     """Proposal lifecycle status (AGENTS.md §5)."""
 
@@ -186,6 +200,10 @@ class User(Base):
     expiry_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     auto_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_send_threshold: Mapped[int] = mapped_column(Integer, default=80)
+    #: Per-user order of delivered/listed order cards (§3.1 / task_0004).
+    sort_preference: Mapped[SortPreference] = mapped_column(
+        _enum_col(SortPreference), default=SortPreference.DEFAULT
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     connections: Mapped[List["ExchangeConnection"]] = relationship(
@@ -249,8 +267,8 @@ class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_projects_source_ext"),
-        # Fuzzy-dedup window scans by created_at (§3.1).
         Index("ix_projects_created_at", "created_at"),
+        Index("ix_projects_posted_at", "posted_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

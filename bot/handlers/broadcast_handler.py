@@ -30,6 +30,7 @@ from emoji_config import (
     primary_button,
     success_button,
 )
+from services.broadcast.owner_groups import OwnerGroup, list_owner_groups
 from services.broadcast.repository import BroadcastRepository, GroupRecord
 from services.logger_config import get_logger
 
@@ -61,6 +62,11 @@ _DRAFT_KEYS = (
 
 def _repository() -> BroadcastRepository:
     return BroadcastRepository()
+
+
+async def _list_owner_groups() -> list[OwnerGroup] | None:
+    """Список собственных чатов владельца (оборачивает сервис, мокается в тестах)."""
+    return await list_owner_groups()
 
 
 @owner_only
@@ -123,6 +129,14 @@ async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @owner_only
 async def save_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # B-1: a non-text message (sticker/photo) in this state used to fall through
+    # to ``update.message.text`` access — guard explicitly and re-prompt.
+    if update.message is None or update.message.text is None:
+        if update.message is not None:
+            await update.message.reply_text(
+                "Название должно быть текстом 1–100 символов."
+            )
+        return ENTERING_GROUP_NAME
     name = (update.message.text or "").strip()
     if not 1 <= len(name) <= 100:
         await update.message.reply_text("Название должно содержать 1–100 символов.")
@@ -137,7 +151,7 @@ async def save_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"Группа «{name}» создана.\n\n"
         "Присылайте chat_id, @username или https://t.me/username.\n"
         "/done — завершить.",
-        reply_markup=_cancel_keyboard(),
+        reply_markup=_adding_chat_keyboard(),
     )
     return ADDING_CHAT
 
@@ -297,7 +311,83 @@ async def add_chat_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data["current_group_id"] = group_id
     await query.edit_message_text(
         "Пришлите chat_id, @username или ссылку. /done — завершить.",
-        reply_markup=_cancel_keyboard(),
+        reply_markup=_adding_chat_keyboard(),
+    )
+    return ADDING_CHAT
+
+
+@owner_only
+async def my_groups_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать собственные чаты владельца для быстрого добавления."""
+    query = update.callback_query
+    await query.answer()
+    group_id = context.user_data.get("current_group_id")
+    if not group_id:
+        await query.edit_message_text("Сегмент не найден. Начните заново.")
+        return ConversationHandler.END
+    groups = await _list_owner_groups()
+    if not groups:
+        await query.edit_message_text(
+            "Telethon-сессия владельца не настроена или диалогов нет.\n\n"
+            "Добавьте чаты вручную: пришлите chat_id, @username или ссылку.",
+            reply_markup=_adding_chat_keyboard(),
+        )
+        return ADDING_CHAT
+    rows = [
+        [
+            (
+                success_button(
+                    f"{group.title}",
+                    icon=P.EYE,
+                    callback_data=f"bcast_my_group_pick_{group.chat_id}",
+                )
+                if group.chat_type == "channel"
+                else primary_button(
+                    f"{group.title}",
+                    icon=P.PEOPLE,
+                    callback_data=f"bcast_my_group_pick_{group.chat_id}",
+                )
+            )
+        ]
+        for group in groups
+    ]
+    rows.append([neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")])
+    await query.edit_message_text(
+        "Мои группы/каналы — выберите, что добавить:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return ADDING_CHAT
+
+
+@owner_only
+async def my_group_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтвердить право публикации бота и добавить выбранный чат в сегмент."""
+    query = update.callback_query
+    await query.answer()
+    group_id = context.user_data.get("current_group_id")
+    if not group_id:
+        await query.edit_message_text("Сегмент не найден. Начните заново.")
+        return ConversationHandler.END
+    raw_chat_id = query.data.removeprefix("bcast_my_group_pick_")
+    resolved = await _resolve_authorized_chat(raw_chat_id, context)
+    if resolved is None:
+        await query.edit_message_text(
+            "Бот не может публиковать в этот чат (нет прав администратора). "
+            "Чат не добавлен.",
+            reply_markup=_adding_chat_keyboard(),
+        )
+        return ADDING_CHAT
+    saved = await _repository().add_recipient(
+        group_id=int(group_id),
+        owner_telegram_id=OWNER_CHAT_ID,
+        **resolved,
+    )
+    if not saved:
+        await query.edit_message_text("Группа не найдена.")
+        return ConversationHandler.END
+    await query.edit_message_text(
+        f"Чат {resolved['title']} добавлен. Можно добавить ещё или /done.",
+        reply_markup=_adding_chat_keyboard(),
     )
     return ADDING_CHAT
 
@@ -748,6 +838,21 @@ def _cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _adding_chat_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                success_button(
+                    "Добавить мои группы",
+                    icon=P.PEOPLE,
+                    callback_data="bcast_my_groups",
+                )
+            ],
+            [neutral_button("Отмена", icon=P.CROSS, callback_data="bcast_cancel")],
+        ]
+    )
+
+
 def _confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -782,6 +887,10 @@ def get_broadcast_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, save_group_name)
             ],
             ADDING_CHAT: [
+                CallbackQueryHandler(my_groups_start, pattern=r"^bcast_my_groups$"),
+                CallbackQueryHandler(
+                    my_group_picked, pattern=r"^bcast_my_group_pick_-?\d+$"
+                ),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_chat),
                 CommandHandler("done", done_adding),
             ],

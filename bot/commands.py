@@ -24,6 +24,22 @@ from config import DB_PATH
 logger = get_logger(__name__)
 
 
+def _md_escape(value: object) -> str:
+    """Escape MarkdownV1 special chars in untrusted text before interpolation.
+
+    Telegram MarkdownV1 treats ``_``, ``*``, ``[`` and backtick as markup, so a
+    user-typed search query or a scraped title containing them breaks parsing
+    (silent message loss) — E-3. HTML-like chars are irrelevant for MarkdownV1.
+    """
+    return (
+        str(value if value is not None else "")
+        .replace("_", "\\_")
+        .replace("*", "\\*")
+        .replace("[", "\\[")
+        .replace("`", "\\`")
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — the very first screen every user sees.
 
@@ -319,17 +335,18 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not results:
         await update.message.reply_text(
-            f"\U0001f50d \u041f\u043e \u0437\u0430\u043f\u0440\u043e\u0441\u0443 `'{query}'` \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
+            f"\U0001f50d \u041f\u043e \u0437\u0430\u043f\u0440\u043e\u0441\u0443 `{_md_escape(query)}` \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
             parse_mode="Markdown",
         )
         return
 
-    text = f"\U0001f50d **\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b \u043f\u043e\u0438\u0441\u043a\u0430:** `{query}`\n\n"
+    text = f"\U0001f50d **\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u044b \u043f\u043e\u0438\u0441\u043a\u0430:** `{_md_escape(query)}`\n\n"
     for i, vacancy in enumerate(results, 1):
         priority_emoji = "\U0001f525" if vacancy.ai_priority == "high" else "\u2b50" if vacancy.ai_priority == "medium" else "\U0001f4cc"
         budget = vacancy.budget or f"{vacancy.budget_min or 0}-{vacancy.budget_max or 0} \u20bd"
+        title_escaped = _md_escape(vacancy.title[:50])
         text += (
-            f"{i}. {priority_emoji} [{vacancy.title[:50]}]({vacancy.url})\n"
+            f"{i}. {priority_emoji} [{title_escaped}]({vacancy.url})\n"
             f"   \U0001f4b0 {budget} | \U0001f4c5 {vacancy.deadline or 'N/A'} | \u2b50 {vacancy.ai_score or 'N/A'}\n\n"
         )
 

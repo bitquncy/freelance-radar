@@ -36,6 +36,7 @@ from core.models import (
     ExchangeConnection,
     Platform,
     PortfolioItem,
+    ProjectAnalysis,
     Proposal,
     ProposalMode,
     ProposalStatus,
@@ -190,12 +191,24 @@ class TestPortfolioFlow:
 
 
 class TestProposalFlow:
+    @staticmethod
+    async def _add_analysis(session: AsyncSession, user, project) -> None:
+        """Create a ProjectAnalysis so the user can see the project."""
+        analysis = ProjectAnalysis(
+            project_id=project.id,
+            user_id=user.id,
+            extracted_budget=25000,
+        )
+        session.add(analysis)
+        await session.commit()
+
     async def test_template_mode_for_basic(
         self, session_factory, session: AsyncSession, user, portfolio, project
     ) -> None:
         """§7: Basic → шаблон + ручное редактирование (no LLM call)."""
         user.subscription_tier = SubscriptionTier.BASIC
         await session.commit()
+        await self._add_analysis(session, user, project)
         update = make_update(callback_data=f"v2p:gen:{project.id}")
         await proposal_generate(update, make_context())
         async with session_factory() as check:

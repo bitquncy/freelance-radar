@@ -24,7 +24,10 @@ async def v2_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         await apply_client_note(update, context, text)
         return
-    if user_data.pop("v2_add_channel", None):
+    # E-1: use .get() (not .pop()) for the channel-add flow so that a
+    # validation error in add_channel_from_text can keep the pending state
+    # alive and the user's corrected reply is still consumed by this flow.
+    if user_data.get("v2_add_channel"):
         from bot.handlers.v2.sources import add_channel_from_text
 
         await add_channel_from_text(update, context, text)

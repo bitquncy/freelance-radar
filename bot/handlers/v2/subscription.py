@@ -3,7 +3,6 @@
 Payments per roadmap MVP: "оплата вручную/по инвойсу для первых пользователей
 до интеграции платежей" — Telegram Payments/ЮKassa integration is Phase 2.
 """
-from datetime import timedelta
 from typing import List
 
 from sqlalchemy import func, select
@@ -17,12 +16,10 @@ from telegram.ext import (
 
 from bot.auth import owner_only
 from bot.handlers.v2.common import TIER_TITLES, get_or_create_user, tier_label
-from core import crm, tariffs
+from core import billing, crm, tariffs
 from core.db import get_session_factory
 from core.models import (
-    PaymentStatus,
     ProjectAnalysis,
-    Subscription,
     SubscriptionTier,
     User,
     utcnow,
@@ -186,20 +183,22 @@ async def grant_subscription(
                 "Пользователь не найден — он должен сначала запустить /radar."
             )
             return
-        now = utcnow()
-        user.subscription_tier = tier
-        user.subscription_expires_at = now + timedelta(days=days)
-        user.expiry_notified_at = None  # new period → nudge eligible again
-        session.add(
-            Subscription(
-                user_id=user.id,
-                tier=tier,
-                amount=tariffs.PRICES_RUB[tier],
-                provider="manual_invoice",
-                status=PaymentStatus.PAID,
-                period_start=now,
-                period_end=now + timedelta(days=days),
-            )
+        # BL-8: go through the same locked, idempotent activation path as a paid
+        # checkout. A synthetic ``manual:<telegram_id>:<ts>`` charge id makes a
+        # repeated /grant safe (it won't double-extend days the way the raw
+        # field assignment did) and records a Subscription audit row.
+        intent = billing.PaymentIntent(
+            tier=tier,
+            days=days,
+            amount_rub=tariffs.PRICES_RUB[tier],
+        )
+        charge_id = f"manual:{telegram_id}:{int(utcnow().timestamp())}"
+        await billing.apply_paid_subscription(
+            session,
+            user,
+            intent,
+            charge_id=charge_id,
+            provider="manual_invoice",
         )
         await session.commit()
     await update.message.reply_text(

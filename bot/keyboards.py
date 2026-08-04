@@ -2,18 +2,32 @@
 
 from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from emoji_config import P, danger_button, inline_button, primary_button, success_button
+from emoji_config import (
+    P,
+    btn_danger,
+    btn_neutral,
+    btn_primary,
+    danger_button,
+    inline_button,
+    primary_button,
+    success_button,
+)
 
 # Единый источник истины для подписей reply-меню: они же служат
 # матчерами входящего текста в ``main.py``. Держать их в одном месте
 # обязательно: рассогласование сделало бы кнопки нажатыми-без-реакции.
-MENU_JOBS = f"{P.LIST} Вакансии"
-MENU_SETTINGS = f"{P.SETTINGS} Настройки"
-MENU_SOURCES = f"{P.RADAR} Источники"
-MENU_STATS = f"{P.CHART} Статистика"
-MENU_PROFILE = f"{P.USER} Профиль"
-MENU_HELP = f"{P.HELP} Помощь"
-MENU_BROADCAST = f"{P.MEGAPHONE} Рассылка"
+#
+# ReplyKeyboardMarkup не поддерживает нативные ``style``/``icon_custom_emoji_id``
+# (Bot API 9.4 стилизует только inline-кнопки), поэтому «цвет» reply-меню —
+# цветной маркер BTN_* перед текстом. Маркеры всегда plain Unicode, чтобы не
+# ломать матчинг роутера и не протекать HTML-тегами в подписи кнопок.
+MENU_JOBS = btn_primary("Вакансии", P.LIST)
+MENU_SETTINGS = btn_primary("Настройки", P.SETTINGS)
+MENU_SOURCES = btn_primary("Источники", P.RADAR)
+MENU_STATS = btn_neutral("Статистика", P.CHART)
+MENU_PROFILE = btn_primary("Профиль", P.USER)
+MENU_HELP = btn_neutral("Помощь", P.HELP)
+MENU_BROADCAST = btn_danger("Рассылка", P.MEGAPHONE)
 
 #: Порядок важен — из него строится и сетка кнопок, и регулярка роутера.
 MAIN_MENU_BUTTONS = (

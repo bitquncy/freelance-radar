@@ -20,6 +20,7 @@ BOT_COMMANDS = [
     BotCommand("radar", f"{P.SETTINGS} Профиль: ставка, налоги, навыки"),
     BotCommand("portfolio", f"{P.BRIEFCASE} Портфолио для AI-откликов"),
     BotCommand("clients", f"{P.PEOPLE} CRM и воронка клиентов"),
+    BotCommand("sort", f"{P.SETTINGS} Порядок новых заказов"),
     BotCommand("subscription", f"{P.STAR} Подписка и оплата"),
     BotCommand("help", f"{P.HELP} Как это работает"),
 ]
@@ -55,6 +56,7 @@ def register_v2_handlers(application: Application) -> None:
     from bot.handlers.v2.portfolio import get_portfolio_handlers
     from bot.handlers.v2.proposals import get_proposal_handlers
     from bot.handlers.v2.router import get_text_router
+    from bot.handlers.v2.sort_preference import get_sort_preference_handlers
     from bot.handlers.v2.sources import get_source_handlers
     from bot.handlers.v2.subscription import get_subscription_handlers
 
@@ -70,6 +72,7 @@ def register_v2_handlers(application: Application) -> None:
         + get_crm_handlers()
         + get_subscription_handlers()
         + get_payment_handlers()
+        + get_sort_preference_handlers()
         + [get_text_router()]
     )
     for handler in handlers:

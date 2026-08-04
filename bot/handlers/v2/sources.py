@@ -253,6 +253,10 @@ async def add_channel_from_text(
             await session.rollback()
             await update.message.reply_text(f"{P.WARNING} Этот канал уже подключён.")
             return
+    # E-1: clear the pending channel-add state only on success — validation
+    # failures above return without clearing it, so the user's corrected reply
+    # is still consumed by the channel-add flow (router uses .get(), not .pop()).
+    pending(context).pop("v2_add_channel", None)
     await update.message.reply_text(
         f"{E.CHECK} Канал {esc(username)} подключён", parse_mode="HTML"
     )

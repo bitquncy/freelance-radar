@@ -231,7 +231,8 @@ async def filters_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             text += f"{P.STAR} Мин. рейтинг: {profile.min_customer_rating}\n"
         if profile.max_proposals_count:
             text += f"{P.CHART} Макс. предложений: {profile.max_proposals_count}\n"
-        text += f"{P.ROBOT} Авто-режим: {'{P.CHECK}' if profile.auto_mode_enabled else '{P.CROSS}'}"
+        auto_status = P.CHECK if profile.auto_mode_enabled else P.CROSS
+        text += f"{P.ROBOT} Авто-режим: {auto_status}"
     else:
         text += "Фильтры не настроены."
 

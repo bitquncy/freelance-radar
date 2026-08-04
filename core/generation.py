@@ -13,6 +13,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
+from html import escape as html_escape
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -26,6 +27,12 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 MIN_WORDS = 80
 MAX_WORDS = 150
+
+_POTENTIALLY_DANGEROUS_HTML_RE = re.compile(
+    r"<(?:\s*/?\s*(?:script|iframe|object|embed|form|input|link|meta|style|base|applet|"
+    r"frame|frameset|ilayer|layer|bgsound|title|head|body|html|xml)|!--)",
+    re.IGNORECASE,
+)
 
 CLICHES: Tuple[str, ...] = (
     "здравствуйте, увидел ваш проект",
@@ -244,6 +251,16 @@ def render_portfolio_cases(items: Sequence[PortfolioItem]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def sanitize_proposal_html(text: str) -> str:
+    """Strip dangerous HTML/script tags from LLM-generated text before bot delivery.
+
+    Telegram uses ``parse_mode="HTML"``, so an LLM that accidentally emits
+    ``<script>``, ``<iframe>`` or other active tags would create an XSS vector.
+    This function strips the dangerous tags while preserving their inner text.
+    """
+    return _POTENTIALLY_DANGEROUS_HTML_RE.sub("", text)
+
+
 def validate_proposal(text: str, portfolio_items: Sequence[PortfolioItem]) -> List[str]:
     """Validate a proposal against §3.5/§6.4 rules.
 
@@ -268,6 +285,9 @@ def validate_proposal(text: str, portfolio_items: Sequence[PortfolioItem]) -> Li
     has_cta = any(marker in tail for marker in CTA_MARKERS)
     if not ends_with_question and not has_cta:
         violations.append("ending: нет вопроса или предложения следующего шага")
+
+    if _POTENTIALLY_DANGEROUS_HTML_RE.search(text):
+        violations.append("security: текст содержит потенциально опасные HTML-теги")
 
     corpus = " ".join(
         f"{i.title} {i.description} {' '.join(i.tags or [])} {i.media_url or ''}"

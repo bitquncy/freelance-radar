@@ -20,6 +20,7 @@ for Business (§7) affects notification ordering only, not scrape frequency.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import func, select, update
@@ -45,11 +46,13 @@ from core.models import (
     ProjectAnalysis,
     Reminder,
     ReminderStatus,
+    SortPreference,
     SubscriptionTier,
     User,
     utcnow,
 )
 from core.scoring import ScoreResult, estimate_hours, score_project
+from core.sorting import sort_project_cards
 from emoji_config import E
 from monitoring.adapters.base import RawListing, SourceAdapter
 from monitoring.collector import Collector
@@ -412,6 +415,46 @@ async def _deliver_analysis_notification(
     return delivered is not False
 
 
+def _order_pending_ids(
+    rows: Sequence[
+        Tuple[NotificationDelivery, ProjectAnalysis, Project, Optional[SortPreference]]
+    ],
+) -> List[int]:
+    """Order pending outbox rows respecting each user's sort preference.
+
+    Rows arrive already ordered by ``NotificationDelivery.id`` (insertion
+    order). Per user we re-order their queued cards by the stored
+    ``sort_preference`` via :func:`core.sorting.sort_project_cards`, while
+    cross-user order stays deterministic (by each user's earliest queued
+    row). When every preference is ``DEFAULT``/``None`` this function is the
+    identity on id order, so existing delivery behaviour is unchanged.
+    """
+    groups: Dict[int, List[Tuple]] = {}
+    first_seen: List[int] = []
+    for row in rows:
+        delivery = row[0]
+        uid = delivery.user_id
+        if uid not in groups:
+            groups[uid] = []
+            first_seen.append(uid)
+        groups[uid].append(row)
+
+    result: List[int] = []
+    for uid in first_seen:
+        group = groups[uid]
+        preference = group[0][3] or SortPreference.DEFAULT
+        if preference is SortPreference.DEFAULT:
+            result.extend(delivery.analysis_id for delivery, _, _, _ in group)
+            continue
+        wrappers = [
+            SimpleNamespace(project=project, analysis=analysis, delivery=delivery)
+            for delivery, analysis, project, _ in group
+        ]
+        for wrapper in sort_project_cards(wrappers, preference):
+            result.append(wrapper.delivery.analysis_id)
+    return result
+
+
 async def _drain_pending_notifications(
     factory: async_sessionmaker,
     application: Optional[Application],
@@ -436,9 +479,20 @@ async def _drain_pending_notifications(
                 last_error="stale_delivery_recovered",
             )
         )
-        ids = list(
-            await session.scalars(
-                select(NotificationDelivery.analysis_id)
+        rows = list(
+            await session.execute(
+                select(
+                    NotificationDelivery,
+                    ProjectAnalysis,
+                    Project,
+                    User.sort_preference,
+                )
+                .join(
+                    ProjectAnalysis,
+                    ProjectAnalysis.id == NotificationDelivery.analysis_id,
+                )
+                .join(Project, Project.id == NotificationDelivery.project_id)
+                .join(User, User.id == NotificationDelivery.user_id)
                 .where(
                     NotificationDelivery.status == NotificationStatus.PENDING,
                     NotificationDelivery.next_attempt_at <= now,
@@ -448,6 +502,7 @@ async def _drain_pending_notifications(
             )
         )
         await session.commit()
+    ids = _order_pending_ids(rows)
     sent = failed = 0
     for analysis_id in ids:
         delivered = await _deliver_analysis_notification(

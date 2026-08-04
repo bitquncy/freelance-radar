@@ -10,6 +10,7 @@ import pytest
 from telegram.ext import ConversationHandler
 
 from bot.handlers import broadcast_handler as handler
+from services.broadcast.owner_groups import OwnerGroup
 from services.broadcast.repository import GroupRecord
 
 
@@ -290,3 +291,99 @@ async def test_schedule_cancel_timeout_and_registration(monkeypatch) -> None:
     assert not context.user_data
     assert handler.get_broadcast_handler().persistent is True
     assert len(handler.get_broadcast_handlers()) == 6
+
+
+@pytest.mark.asyncio
+async def test_my_groups_start_shows_picker(monkeypatch, group) -> None:
+    repository = _repository()
+    monkeypatch.setattr(handler, "_repository", lambda: repository)
+    monkeypatch.setattr(
+        handler,
+        "_list_owner_groups",
+        AsyncMock(
+            return_value=[
+                OwnerGroup(-1001, "channel", "Новости", "news"),
+                OwnerGroup(-1002, "supergroup", "Команда", None),
+            ]
+        ),
+    )
+    context = _context(current_group_id=group.id)
+    query = _query("bcast_my_groups")
+
+    assert (
+        await handler.my_groups_start.__wrapped__(_update(query=query), context)
+        == handler.ADDING_CHAT
+    )
+    markup = query.edit_message_text.await_args.kwargs["reply_markup"]
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "bcast_my_group_pick_-1001" in callbacks
+    assert "bcast_my_group_pick_-1002" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_my_groups_start_falls_back_to_manual_entry(monkeypatch, group) -> None:
+    repository = _repository()
+    monkeypatch.setattr(handler, "_repository", lambda: repository)
+    monkeypatch.setattr(handler, "_list_owner_groups", AsyncMock(return_value=None))
+    context = _context(current_group_id=group.id)
+    query = _query("bcast_my_groups")
+
+    assert (
+        await handler.my_groups_start.__wrapped__(_update(query=query), context)
+        == handler.ADDING_CHAT
+    )
+    text = query.edit_message_text.await_args.args[0]
+    assert "вручную" in text
+
+
+@pytest.mark.asyncio
+async def test_my_group_picked_adds_validated_chat(monkeypatch, group) -> None:
+    repository = _repository()
+    repository.add_recipient.return_value = True
+    monkeypatch.setattr(handler, "_repository", lambda: repository)
+    monkeypatch.setattr(
+        handler,
+        "_resolve_authorized_chat",
+        AsyncMock(
+            return_value={
+                "chat_id": -1001,
+                "chat_type": "channel",
+                "title": "Новости",
+                "username": "news",
+                "language_code": "ru",
+            }
+        ),
+    )
+    context = _context(current_group_id=group.id)
+    query = _query("bcast_my_group_pick_-1001")
+
+    assert (
+        await handler.my_group_picked.__wrapped__(_update(query=query), context)
+        == handler.ADDING_CHAT
+    )
+    repository.add_recipient.assert_awaited_once()
+    assert repository.add_recipient.await_args.kwargs["chat_id"] == -1001
+    assert "добавлен" in query.edit_message_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_my_group_picked_rejects_without_permission(monkeypatch, group) -> None:
+    repository = _repository()
+    monkeypatch.setattr(handler, "_repository", lambda: repository)
+    monkeypatch.setattr(
+        handler, "_resolve_authorized_chat", AsyncMock(return_value=None)
+    )
+    context = _context(current_group_id=group.id)
+    query = _query("bcast_my_group_pick_-1001")
+
+    assert (
+        await handler.my_group_picked.__wrapped__(_update(query=query), context)
+        == handler.ADDING_CHAT
+    )
+    repository.add_recipient.assert_not_awaited()
+    assert "не может публиковать" in query.edit_message_text.await_args.args[0]
